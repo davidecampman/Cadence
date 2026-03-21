@@ -2,9 +2,8 @@
 name = "agent-one"
 version = "0.1.0"
 description = "A model-agnostic multi-agent framework with structured planning, tiered memory, and parallel task execution."
-readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
 dependencies = [
     "litellm>=1.40.0",
     "chromadb>=0.5.0",
@@ -22,6 +21,9 @@ dev = [
 
 [project.scripts]
 agent-one = "agent_one.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["agent_one*"]
 
 [tool.ruff]
 line-length = 100
