@@ -1,0 +1,48 @@
+# Agent One - Default Configuration
+# Override any value via environment variables: AGENT_ONE_<SECTION>_<KEY>
+# e.g., AGENT_ONE_MODELS_STRONG=claude-opus-4-20250514
+
+models:
+  # Smart routing: use the right model for the right job
+  strong: "claude-sonnet-4-20250514"      # Complex reasoning, code generation
+  fast: "claude-haiku-4-5-20251001"       # Planning, memory queries, simple tasks
+  embedding: "text-embedding-3-small"     # Memory embeddings
+
+  # Fallback chain: if primary fails, try these in order
+  fallback_chain:
+    - "gpt-4o"
+    - "claude-sonnet-4-20250514"
+
+budget:
+  max_tokens_per_task: 100000       # Per-task token ceiling
+  max_tokens_per_session: 500000    # Per-session token ceiling
+  warn_at_percentage: 80            # Warn user at this % of budget
+
+agents:
+  max_depth: 5                      # Max subordinate nesting depth
+  max_parallel: 4                   # Max concurrent agents
+  loop_detection_window: 5          # Check last N outputs for repetition
+  max_iterations_per_task: 25       # Circuit breaker per task
+
+memory:
+  backend: "chromadb"               # chromadb | faiss
+  persist_dir: "./data/memory"
+  default_namespace: "shared"
+  decay_rate: 0.05                  # Per-day relevance decay
+  max_results: 10                   # Max results per query
+  similarity_threshold: 0.7         # Minimum relevance score
+
+execution:
+  sandbox: "subprocess"             # subprocess | docker | none
+  timeout_seconds: 120              # Default execution timeout
+  max_output_bytes: 1048576         # 1MB output cap
+
+skills:
+  directories:
+    - "./skills"                    # Local skills directory
+  auto_discover: true               # Scan for SKILL.md files on startup
+
+logging:
+  level: "INFO"                     # DEBUG | INFO | WARNING | ERROR
+  trace_file: "./data/traces.jsonl" # Structured reasoning trace output
+  rich_console: true                # Pretty terminal output
