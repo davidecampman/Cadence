@@ -60,7 +60,7 @@ class ToolDefinition(BaseModel):
 class PermissionTier(str, Enum):
     READ_ONLY = "read_only"       # Can read files, search, query memory
     STANDARD = "standard"         # Can write files, run sandboxed code
-    PRIVILEGED = "privileged"     # Can access network, shell, Docker
+    PRIVILEGED = "privileged"     # Can access network, shell commands
     UNRESTRICTED = "unrestricted" # Full OS access (requires explicit opt-in)
 
 

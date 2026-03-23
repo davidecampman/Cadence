@@ -21,6 +21,14 @@ from agent_one.core.trace import TraceLogger
 from agent_one.tools.base import Tool, ToolRegistry
 from agent_one.skills.loader import SkillLoader, SkillDefinition
 from agent_one.routing.router import ModelStats, SmartRouter
+from agent_one.tools.code_execution import (
+    _build_resource_limits,
+    _check_blocked,
+    _shell_quote,
+    _wrap_with_sandbox,
+    CodeExecutionTool,
+    ShellTool,
+)
 
 
 # --- Types ---

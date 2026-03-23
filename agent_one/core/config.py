@@ -51,9 +51,16 @@ class MemoryConfig(BaseModel):
 
 
 class ExecutionConfig(BaseModel):
-    sandbox: str = "subprocess"
     timeout_seconds: int = 120
     max_output_bytes: int = 1_048_576
+    restrict_network: bool = False
+    max_memory_mb: int = 512
+    max_cpu_seconds: int = 60
+    max_file_descriptors: int = 256
+    blocked_commands: list[str] = Field(default_factory=lambda: [
+        "rm -rf /", "rm -rf /*", "mkfs", "dd if=", ":(){", "fork bomb",
+        "chmod -R 777 /", "shutdown", "reboot", "halt", "poweroff",
+    ])
 
 
 class SkillsConfig(BaseModel):
