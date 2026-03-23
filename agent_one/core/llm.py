@@ -35,11 +35,29 @@ def _configure_bedrock_env(bedrock_config) -> dict[str, Any]:
         os.environ.setdefault("AWS_SECRET_ACCESS_KEY", bedrock_config.secret_access_key)
 
     extra_kwargs: dict[str, Any] = {}
-    if bedrock_config.api_key:
-        extra_kwargs["api_key"] = bedrock_config.api_key
-    elif os.environ.get("BEDROCK_API_KEY"):
-        # Fallback: check env var set by the encrypted keystore
-        extra_kwargs["api_key"] = os.environ["BEDROCK_API_KEY"]
+    bedrock_api_key = bedrock_config.api_key or os.environ.get("BEDROCK_API_KEY")
+    if bedrock_api_key:
+        extra_kwargs["api_key"] = bedrock_api_key
+        # LiteLLM's bedrock handler requires boto3 credentials even when using
+        # Bearer token auth (api_key). Set placeholder AWS creds so boto3
+        # session initialization doesn't fail.
+        os.environ.setdefault("AWS_ACCESS_KEY_ID", "bedrock-api-key-auth")
+        os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "bedrock-api-key-auth")
+    return extra_kwargs
+
+
+def _configure_bedrock_from_env() -> dict[str, Any]:
+    """Build bedrock extra kwargs from environment variables alone.
+
+    Used when a model has a bedrock/ prefix but no explicit bedrock config.
+    """
+    extra_kwargs: dict[str, Any] = {}
+    bedrock_api_key = os.environ.get("BEDROCK_API_KEY")
+    if bedrock_api_key:
+        extra_kwargs["api_key"] = bedrock_api_key
+        os.environ.setdefault("AWS_ACCESS_KEY_ID", "bedrock-api-key-auth")
+        os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "bedrock-api-key-auth")
+    os.environ.setdefault("AWS_REGION_NAME", "us-east-1")
     return extra_kwargs
 
 
@@ -185,10 +203,8 @@ async def chat_completion(
         model = _to_bedrock_model(model)
         bedrock_extra = _configure_bedrock_env(bedrock_config)
     elif _is_bedrock_model(model):
-        # Model is explicitly bedrock-prefixed; pass keystore credentials if available
-        bedrock_api_key = os.environ.get("BEDROCK_API_KEY")
-        if bedrock_api_key:
-            bedrock_extra["api_key"] = bedrock_api_key
+        # Model is explicitly bedrock-prefixed; configure from env vars / keystore
+        bedrock_extra = _configure_bedrock_from_env()
 
     kwargs: dict[str, Any] = {
         "model": model,
