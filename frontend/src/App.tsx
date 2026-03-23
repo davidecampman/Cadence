@@ -7,12 +7,16 @@ import {
   fetchSkills,
   checkHealth,
   connectWebSocket,
+  fetchKeys,
+  saveKey,
+  deleteKey,
   type AppConfig,
   type ChatResponse,
   type TraceStep,
   type ToolInfo,
   type SkillInfo,
   type WsMessage,
+  type KeysResponse,
 } from './api'
 import './App.css'
 
@@ -41,6 +45,10 @@ function App() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [configSaving, setConfigSaving] = useState(false);
   const [configSaved, setConfigSaved] = useState(false);
+  const [keysInfo, setKeysInfo] = useState<KeysResponse | null>(null);
+  const [keyInput, setKeyInput] = useState('');
+  const [keySaving, setKeySaving] = useState(false);
+  const [keySaved, setKeySaved] = useState<string | null>(null);
   const [configDraft, setConfigDraft] = useState<{
     strong: string;
     fast: string;
@@ -66,6 +74,7 @@ function App() {
     fetchTools().then(setTools).catch(() => {});
     fetchSkills().then(setSkills).catch(() => {});
     fetchConfig().then(setConfig).catch(() => {});
+    fetchKeys().then(setKeysInfo).catch(() => {});
   }, []);
 
   // WebSocket for live trace
@@ -128,6 +137,34 @@ function App() {
       setConfigSaving(false);
     }
   }, [configDraft]);
+
+  const handleKeySave = useCallback(async () => {
+    if (!configDraft?.provider || !keyInput.trim()) return;
+    setKeySaving(true);
+    try {
+      await saveKey(configDraft.provider, keyInput.trim());
+      setKeyInput('');
+      setKeySaved(configDraft.provider);
+      setTimeout(() => setKeySaved(null), 3000);
+      // Refresh stored keys info
+      const updated = await fetchKeys();
+      setKeysInfo(updated);
+    } catch (err) {
+      alert(`Failed to save key: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setKeySaving(false);
+    }
+  }, [configDraft?.provider, keyInput]);
+
+  const handleKeyDelete = useCallback(async (provider: string) => {
+    try {
+      await deleteKey(provider);
+      const updated = await fetchKeys();
+      setKeysInfo(updated);
+    } catch (err) {
+      alert(`Failed to delete key: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  }, []);
 
   const handleSend = useCallback(async (text?: string) => {
     const msg = text || input.trim();
@@ -414,14 +451,34 @@ function App() {
                 <div className="config-section">
                   <h3>Provider API Keys</h3>
                   <p className="config-hint">
-                    API keys are read from environment variables (e.g. OPENAI_API_KEY, ANTHROPIC_API_KEY).
-                    Set them in your shell or .env file before starting the server.
+                    Enter your API keys here. They are encrypted and stored securely on the server.
+                    Keys set via environment variables take precedence over stored keys.
                   </p>
+
+                  {/* Stored keys summary */}
+                  {keysInfo && keysInfo.stored.length > 0 && (
+                    <div className="keys-stored-list">
+                      {keysInfo.stored.map((p) => (
+                        <div key={p} className="key-stored-item">
+                          <span className="key-provider-name">{p}</span>
+                          <span className="key-status-badge">Configured</span>
+                          <button
+                            className="key-delete-btn"
+                            onClick={() => handleKeyDelete(p)}
+                            title={`Remove ${p} API key`}
+                          >
+                            &#x2715;
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   <div className="config-field">
                     <label>Provider</label>
                     <select
                       value={configDraft.provider}
-                      onChange={(e) => setConfigDraft({ ...configDraft, provider: e.target.value })}
+                      onChange={(e) => { setConfigDraft({ ...configDraft, provider: e.target.value }); setKeyInput(''); }}
                     >
                       <option value="">Select a provider...</option>
                       <option value="openai">OpenAI</option>
@@ -435,19 +492,52 @@ function App() {
                       <option value="bedrock">AWS Bedrock</option>
                     </select>
                   </div>
+                  {configDraft.provider && configDraft.provider !== 'ollama' && configDraft.provider !== 'bedrock' && (
+                    <div className="config-field" style={{ marginTop: 12 }}>
+                      <label>
+                        API Key
+                        <span className="field-hint">
+                          {keysInfo?.providers?.[configDraft.provider]?.env_var
+                            ? `Sets ${keysInfo.providers[configDraft.provider].env_var}`
+                            : ''}
+                          {keysInfo?.providers?.[configDraft.provider]?.has_key
+                            ? ' (key already stored)'
+                            : ''}
+                        </span>
+                      </label>
+                      <div className="key-input-row">
+                        <input
+                          type="password"
+                          value={keyInput}
+                          onChange={(e) => setKeyInput(e.target.value)}
+                          placeholder={
+                            keysInfo?.providers?.[configDraft.provider]?.has_key
+                              ? 'Enter new key to replace existing...'
+                              : 'Paste your API key here...'
+                          }
+                        />
+                        <button
+                          className="config-save-btn key-save-btn"
+                          onClick={handleKeySave}
+                          disabled={keySaving || !keyInput.trim()}
+                        >
+                          {keySaving
+                            ? 'Saving...'
+                            : keySaved === configDraft.provider
+                              ? 'Saved!'
+                              : 'Save Key'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   {configDraft.provider && (
                     <div className="config-provider-info">
-                      <span className="config-env-var">
-                        {configDraft.provider === 'openai' && 'OPENAI_API_KEY'}
-                        {configDraft.provider === 'anthropic' && 'ANTHROPIC_API_KEY'}
-                        {configDraft.provider === 'google' && 'GEMINI_API_KEY'}
-                        {configDraft.provider === 'mistral' && 'MISTRAL_API_KEY'}
-                        {configDraft.provider === 'cohere' && 'COHERE_API_KEY'}
-                        {configDraft.provider === 'deepseek' && 'DEEPSEEK_API_KEY'}
-                        {configDraft.provider === 'groq' && 'GROQ_API_KEY'}
-                        {configDraft.provider === 'ollama' && 'No API key needed (runs locally)'}
-                        {configDraft.provider === 'bedrock' && 'AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, AWS profile, or Bedrock API key'}
-                      </span>
+                      {(configDraft.provider === 'ollama') && (
+                        <span className="config-env-var">No API key needed (runs locally)</span>
+                      )}
+                      {(configDraft.provider === 'bedrock') && (
+                        <span className="config-env-var">Configure via AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY env vars, AWS profile, or Bedrock API key</span>
+                      )}
                       <div className="config-model-suggestions">
                         <span className="config-hint">Popular models:</span>
                         {configDraft.provider === 'openai' && (

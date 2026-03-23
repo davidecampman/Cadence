@@ -99,6 +99,38 @@ export async function checkHealth(): Promise<boolean> {
   }
 }
 
+// --- API Key management ---
+
+export interface KeyStatus {
+  env_var: string;
+  has_key: boolean;
+}
+
+export interface KeysResponse {
+  providers: Record<string, KeyStatus>;
+  stored: string[];
+}
+
+export async function fetchKeys(): Promise<KeysResponse> {
+  const res = await fetch(`${API_BASE}/keys`);
+  if (!res.ok) throw new Error(`Keys fetch failed: ${res.status}`);
+  return res.json();
+}
+
+export async function saveKey(provider: string, apiKey: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/keys`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider, api_key: apiKey }),
+  });
+  if (!res.ok) throw new Error(`Key save failed: ${res.status}`);
+}
+
+export async function deleteKey(provider: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/keys/${provider}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`Key delete failed: ${res.status}`);
+}
+
 export type WsMessage =
   | { type: 'trace'; data: TraceStep }
   | { type: 'pong' };

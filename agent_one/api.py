@@ -16,6 +16,13 @@ from pydantic import BaseModel
 
 from agent_one.app import AgentOneApp
 from agent_one.core.config import update_config as _update_config
+from agent_one.core.keystore import (
+    save_key as _save_key,
+    delete_key as _delete_key,
+    list_providers as _list_providers,
+    inject_keys_to_env,
+    PROVIDER_ENV_VARS,
+)
 from agent_one.core.types import TraceStep
 
 app = FastAPI(title="Agent One", version="0.1.0")
@@ -91,6 +98,8 @@ class ChatResponse(BaseModel):
 @app.on_event("startup")
 async def startup():
     global _original_log
+    # Inject any stored API keys into environment before first use
+    inject_keys_to_env()
     agent_app = get_app()
     _original_log = agent_app.trace.log
     agent_app.trace.log = _patched_log
@@ -168,6 +177,56 @@ async def get_trace(limit: int = 50):
     agent_app = get_app()
     steps = agent_app.trace.steps[-limit:]
     return [s.model_dump() for s in steps]
+
+
+class ApiKeyRequest(BaseModel):
+    provider: str
+    api_key: str
+
+
+@app.get("/api/keys")
+async def get_keys():
+    """Return which providers have stored keys (never exposes actual keys)."""
+    stored = _list_providers()
+    return {
+        "providers": {
+            name: {
+                "env_var": env_var,
+                "has_key": name in stored,
+            }
+            for name, env_var in PROVIDER_ENV_VARS.items()
+        },
+        "stored": stored,
+    }
+
+
+@app.post("/api/keys")
+async def post_key(req: ApiKeyRequest):
+    """Store an API key for a provider (encrypted at rest)."""
+    provider = req.provider.lower()
+    if provider not in PROVIDER_ENV_VARS:
+        return {"error": f"Unknown provider: {provider}"}, 400
+    _save_key(provider, req.api_key)
+    # Also inject into the current process so it takes effect immediately
+    inject_keys_to_env()
+    # Force-set even if env was already defined (user explicitly updated)
+    import os
+    os.environ[PROVIDER_ENV_VARS[provider]] = req.api_key
+    return {"status": "saved", "provider": provider}
+
+
+@app.delete("/api/keys/{provider}")
+async def remove_key(provider: str):
+    """Delete a stored API key."""
+    provider = provider.lower()
+    deleted = _delete_key(provider)
+    if deleted:
+        # Remove from current environment too
+        import os
+        env_var = PROVIDER_ENV_VARS.get(provider)
+        if env_var:
+            os.environ.pop(env_var, None)
+    return {"status": "deleted" if deleted else "not_found", "provider": provider}
 
 
 @app.get("/api/health")
