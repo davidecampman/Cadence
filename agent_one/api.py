@@ -160,8 +160,9 @@ async def put_config(req: ConfigUpdateRequest):
     """Update configuration (partial merge). Returns the full updated config."""
     agent_app = get_app()
     new_config = _update_config(req.updates)
-    # Update the live app's config reference
+    # Update the live app's config reference AND propagate to sub-components
     agent_app.config = new_config
+    agent_app.orchestrator.config = new_config
     agent_app.router = __import__(
         "agent_one.routing.router", fromlist=["SmartRouter"]
     ).SmartRouter(new_config)
@@ -289,6 +290,7 @@ async def post_bedrock_keys(req: BedrockKeysRequest):
     if not agent_app.config.models.bedrock.enabled:
         new_config = _update_config({"models": {"bedrock": {"enabled": True}}})
         agent_app.config = new_config
+        agent_app.orchestrator.config = new_config
 
     return {"status": "saved", "provider": "bedrock", "auth_type": req.auth_type}
 
@@ -311,6 +313,7 @@ async def remove_key(provider: str):
             if agent_app.config.models.bedrock.enabled:
                 new_config = _update_config({"models": {"bedrock": {"enabled": False}}})
                 agent_app.config = new_config
+                agent_app.orchestrator.config = new_config
         return {"status": "deleted" if deleted else "not_found", "provider": provider}
 
     deleted = _delete_key(provider)
