@@ -9,6 +9,7 @@ import {
   connectWebSocket,
   fetchKeys,
   saveKey,
+  saveBedrockKeys,
   deleteKey,
   type AppConfig,
   type ChatResponse,
@@ -49,6 +50,10 @@ function App() {
   const [keyInput, setKeyInput] = useState('');
   const [keySaving, setKeySaving] = useState(false);
   const [keySaved, setKeySaved] = useState<string | null>(null);
+  const [bedrockAuthType, setBedrockAuthType] = useState<'api_key' | 'iam'>('iam');
+  const [bedrockApiKey, setBedrockApiKey] = useState('');
+  const [bedrockAccessKeyId, setBedrockAccessKeyId] = useState('');
+  const [bedrockSecretAccessKey, setBedrockSecretAccessKey] = useState('');
   const [configDraft, setConfigDraft] = useState<{
     strong: string;
     fast: string;
@@ -155,6 +160,33 @@ function App() {
       setKeySaving(false);
     }
   }, [configDraft?.provider, keyInput]);
+
+  const handleBedrockKeySave = useCallback(async () => {
+    setKeySaving(true);
+    try {
+      if (bedrockAuthType === 'api_key') {
+        if (!bedrockApiKey.trim()) return;
+        await saveBedrockKeys('api_key', { api_key: bedrockApiKey.trim() });
+      } else {
+        if (!bedrockAccessKeyId.trim() || !bedrockSecretAccessKey.trim()) return;
+        await saveBedrockKeys('iam', {
+          access_key_id: bedrockAccessKeyId.trim(),
+          secret_access_key: bedrockSecretAccessKey.trim(),
+        });
+      }
+      setBedrockApiKey('');
+      setBedrockAccessKeyId('');
+      setBedrockSecretAccessKey('');
+      setKeySaved('bedrock');
+      setTimeout(() => setKeySaved(null), 3000);
+      const updated = await fetchKeys();
+      setKeysInfo(updated);
+    } catch (err) {
+      alert(`Failed to save Bedrock credentials: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setKeySaving(false);
+    }
+  }, [bedrockAuthType, bedrockApiKey, bedrockAccessKeyId, bedrockSecretAccessKey]);
 
   const handleKeyDelete = useCallback(async (provider: string) => {
     try {
@@ -530,13 +562,73 @@ function App() {
                       </div>
                     </div>
                   )}
+                  {configDraft.provider === 'bedrock' && (
+                    <div className="config-field" style={{ marginTop: 12 }}>
+                      <label>
+                        Credential Type
+                        <span className="field-hint">
+                          {keysInfo?.providers?.bedrock?.has_key ? ' (credentials already stored)' : ''}
+                        </span>
+                      </label>
+                      <select
+                        value={bedrockAuthType}
+                        onChange={(e) => setBedrockAuthType(e.target.value as 'api_key' | 'iam')}
+                        style={{ marginBottom: 12 }}
+                      >
+                        <option value="iam">IAM Credentials (Access Key + Secret)</option>
+                        <option value="api_key">API Key</option>
+                      </select>
+                      {bedrockAuthType === 'api_key' ? (
+                        <div className="key-input-row">
+                          <input
+                            type="password"
+                            value={bedrockApiKey}
+                            onChange={(e) => setBedrockApiKey(e.target.value)}
+                            placeholder="Paste your Bedrock API key..."
+                          />
+                          <button
+                            className="config-save-btn key-save-btn"
+                            onClick={handleBedrockKeySave}
+                            disabled={keySaving || !bedrockApiKey.trim()}
+                          >
+                            {keySaving ? 'Saving...' : keySaved === 'bedrock' ? 'Saved!' : 'Save Key'}
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <div style={{ marginBottom: 8 }}>
+                            <label><span className="field-hint">AWS Access Key ID</span></label>
+                            <input
+                              type="password"
+                              value={bedrockAccessKeyId}
+                              onChange={(e) => setBedrockAccessKeyId(e.target.value)}
+                              placeholder="AKIA..."
+                            />
+                          </div>
+                          <div style={{ marginBottom: 8 }}>
+                            <label><span className="field-hint">AWS Secret Access Key</span></label>
+                            <input
+                              type="password"
+                              value={bedrockSecretAccessKey}
+                              onChange={(e) => setBedrockSecretAccessKey(e.target.value)}
+                              placeholder="Secret access key..."
+                            />
+                          </div>
+                          <button
+                            className="config-save-btn key-save-btn"
+                            onClick={handleBedrockKeySave}
+                            disabled={keySaving || !bedrockAccessKeyId.trim() || !bedrockSecretAccessKey.trim()}
+                          >
+                            {keySaving ? 'Saving...' : keySaved === 'bedrock' ? 'Saved!' : 'Save Credentials'}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
                   {configDraft.provider && (
                     <div className="config-provider-info">
                       {(configDraft.provider === 'ollama') && (
                         <span className="config-env-var">No API key needed (runs locally)</span>
-                      )}
-                      {(configDraft.provider === 'bedrock') && (
-                        <span className="config-env-var">Configure via AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY env vars, AWS profile, or Bedrock API key</span>
                       )}
                       <div className="config-model-suggestions">
                         <span className="config-hint">Popular models:</span>

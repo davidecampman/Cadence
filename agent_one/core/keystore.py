@@ -29,7 +29,14 @@ PROVIDER_ENV_VARS: dict[str, str] = {
     "cohere": "COHERE_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
     "groq": "GROQ_API_KEY",
+    # AWS Bedrock — supports API key or IAM credentials (access key + secret)
+    "bedrock_api_key": "BEDROCK_API_KEY",
+    "bedrock_access_key_id": "AWS_ACCESS_KEY_ID",
+    "bedrock_secret_access_key": "AWS_SECRET_ACCESS_KEY",
 }
+
+# Sub-keys that belong to the "bedrock" provider group
+BEDROCK_KEYS = {"bedrock_api_key", "bedrock_access_key_id", "bedrock_secret_access_key"}
 
 
 def _ensure_data_dir() -> None:
@@ -105,6 +112,25 @@ def delete_key(provider: str) -> bool:
 def list_providers() -> list[str]:
     """Return provider names that have a stored key."""
     return list(_load_store().keys())
+
+
+def has_bedrock_keys() -> bool:
+    """Return True if any Bedrock credentials are stored."""
+    store = _load_store()
+    return any(k in store for k in BEDROCK_KEYS)
+
+
+def delete_bedrock_keys() -> bool:
+    """Delete all stored Bedrock credentials. Returns True if any existed."""
+    store = _load_store()
+    deleted = False
+    for k in BEDROCK_KEYS:
+        if k in store:
+            del store[k]
+            deleted = True
+    if deleted:
+        _save_store(store)
+    return deleted
 
 
 def inject_keys_to_env() -> list[str]:

@@ -126,6 +126,18 @@ export async function saveKey(provider: string, apiKey: string): Promise<void> {
   if (!res.ok) throw new Error(`Key save failed: ${res.status}`);
 }
 
+export async function saveBedrockKeys(
+  authType: 'api_key' | 'iam',
+  credentials: { api_key?: string; access_key_id?: string; secret_access_key?: string }
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/keys/bedrock`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ auth_type: authType, ...credentials }),
+  });
+  if (!res.ok) throw new Error(`Bedrock key save failed: ${res.status}`);
+}
+
 export async function deleteKey(provider: string): Promise<void> {
   const res = await fetch(`${API_BASE}/keys/${provider}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`Key delete failed: ${res.status}`);

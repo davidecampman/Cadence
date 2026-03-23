@@ -37,6 +37,9 @@ def _configure_bedrock_env(bedrock_config) -> dict[str, Any]:
     extra_kwargs: dict[str, Any] = {}
     if bedrock_config.api_key:
         extra_kwargs["api_key"] = bedrock_config.api_key
+    elif os.environ.get("BEDROCK_API_KEY"):
+        # Fallback: check env var set by the encrypted keystore
+        extra_kwargs["api_key"] = os.environ["BEDROCK_API_KEY"]
     return extra_kwargs
 
 
