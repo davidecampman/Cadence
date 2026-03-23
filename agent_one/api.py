@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from agent_one.app import AgentOneApp
+from agent_one.core.config import update_config as _update_config
 from agent_one.core.types import TraceStep
 
 app = FastAPI(title="Agent One", version="0.1.0")
@@ -123,6 +124,23 @@ async def chat(req: ChatRequest):
 @app.get("/api/config")
 async def get_config():
     return get_app().config.model_dump()
+
+
+class ConfigUpdateRequest(BaseModel):
+    updates: dict
+
+
+@app.put("/api/config")
+async def put_config(req: ConfigUpdateRequest):
+    """Update configuration (partial merge). Returns the full updated config."""
+    agent_app = get_app()
+    new_config = _update_config(req.updates)
+    # Update the live app's config reference
+    agent_app.config = new_config
+    agent_app.router = __import__(
+        "agent_one.routing.router", fromlist=["SmartRouter"]
+    ).SmartRouter(new_config)
+    return new_config.model_dump()
 
 
 @app.get("/api/skills")
