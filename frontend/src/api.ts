@@ -143,6 +143,17 @@ export async function deleteKey(provider: string): Promise<void> {
   if (!res.ok) throw new Error(`Key delete failed: ${res.status}`);
 }
 
+export interface ModelsListResponse {
+  provider: string;
+  models: string[];
+}
+
+export async function fetchModels(provider: string): Promise<ModelsListResponse> {
+  const res = await fetch(`${API_BASE}/models/${provider}`);
+  if (!res.ok) throw new Error(`Models fetch failed: ${res.status}`);
+  return res.json();
+}
+
 export type WsMessage =
   | { type: 'trace'; data: TraceStep }
   | { type: 'pong' };

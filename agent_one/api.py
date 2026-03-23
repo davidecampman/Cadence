@@ -299,6 +299,72 @@ async def remove_key(provider: str):
     return {"status": "deleted" if deleted else "not_found", "provider": provider}
 
 
+@app.get("/api/models/{provider}")
+async def list_models(provider: str):
+    """Return available model names for a provider using litellm's model registry.
+
+    Filters litellm's known model list by provider-specific prefixes or naming
+    patterns. Only returns text/chat models (excludes image, audio, embedding).
+    """
+    from litellm import model_cost
+
+    provider = provider.lower()
+
+    # Provider prefix/pattern mapping.
+    # Some providers use a "prefix/" style in litellm, others use name patterns.
+    _PROVIDER_FILTERS: dict[str, dict] = {
+        "openai": {"prefixes": ["gpt-", "o1", "o3", "o4", "chatgpt-"], "litellm_prefix": "openai/"},
+        "anthropic": {"prefixes": ["claude-"]},
+        "google": {"litellm_prefix": "gemini/"},
+        "mistral": {"litellm_prefix": "mistral/"},
+        "cohere": {"prefixes": ["command-"]},
+        "deepseek": {"prefixes": ["deepseek-"], "litellm_prefix": "deepseek/"},
+        "groq": {"litellm_prefix": "groq/"},
+        "ollama": {"litellm_prefix": "ollama/"},
+        "bedrock": {"litellm_prefix": "bedrock/"},
+    }
+
+    filt = _PROVIDER_FILTERS.get(provider)
+    if not filt:
+        return {"provider": provider, "models": []}
+
+    # Patterns to exclude (images, audio, embedding, etc.)
+    _EXCLUDE = (
+        "dall-e", "tts-", "whisper", "embed", "moderation",
+        "stable-diffusion", "canvas", "image", "video", "audio",
+        "rerank", "polly", "transcribe",
+    )
+
+    models: set[str] = set()
+    for key in model_cost:
+        key_lower = key.lower()
+        # Skip non-text models
+        if any(ex in key_lower for ex in _EXCLUDE):
+            continue
+
+        matched = False
+        # Check litellm prefix (e.g. "bedrock/...", "gemini/...")
+        if filt.get("litellm_prefix") and key_lower.startswith(filt["litellm_prefix"]):
+            matched = True
+        # Check name prefixes (e.g. "gpt-", "claude-")
+        for pfx in filt.get("prefixes", []):
+            if key_lower.startswith(pfx):
+                matched = True
+                break
+
+        if matched:
+            # For bedrock, deduplicate regional/commitment variants
+            # e.g. "bedrock/us-east-1/anthropic.claude-..." → "bedrock/anthropic.claude-..."
+            if provider == "bedrock":
+                parts = key.split("/")
+                model_id = parts[-1]  # last component is always the model ID
+                models.add(f"bedrock/{model_id}")
+            else:
+                models.add(key)
+
+    return {"provider": provider, "models": sorted(models)}
+
+
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "version": "0.1.0"}

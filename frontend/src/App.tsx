@@ -11,6 +11,7 @@ import {
   saveKey,
   saveBedrockKeys,
   deleteKey,
+  fetchModels,
   type AppConfig,
   type ChatResponse,
   type TraceStep,
@@ -59,6 +60,9 @@ function App() {
   const [bedrockApiKey, setBedrockApiKey] = useState('');
   const [bedrockAccessKeyId, setBedrockAccessKeyId] = useState('');
   const [bedrockSecretAccessKey, setBedrockSecretAccessKey] = useState('');
+  const [providerModels, setProviderModels] = useState<string[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelFilter, setModelFilter] = useState('');
   const [configDraft, setConfigDraft] = useState<{
     strong: string;
     fast: string;
@@ -127,6 +131,21 @@ function App() {
     }
   }, [config, configDraft]);
 
+  // Fetch available models when provider changes
+  useEffect(() => {
+    const provider = configDraft?.provider;
+    if (!provider) {
+      setProviderModels([]);
+      return;
+    }
+    setModelsLoading(true);
+    setModelFilter('');
+    fetchModels(provider)
+      .then((res) => setProviderModels(res.models))
+      .catch(() => setProviderModels([]))
+      .finally(() => setModelsLoading(false));
+  }, [configDraft?.provider]);
+
   const handleConfigSave = useCallback(async () => {
     if (!configDraft) return;
     setConfigSaving(true);
@@ -162,9 +181,12 @@ function App() {
       setKeyInput('');
       setKeySaved(configDraft.provider);
       setTimeout(() => setKeySaved(null), 3000);
-      // Refresh stored keys info
+      // Refresh stored keys info and available models
       const updated = await fetchKeys();
       setKeysInfo(updated);
+      fetchModels(configDraft.provider)
+        .then((res) => setProviderModels(res.models))
+        .catch(() => {});
     } catch (err) {
       alert(`Failed to save key: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
@@ -653,69 +675,39 @@ function App() {
                         <span className="config-env-var">No API key needed (runs locally)</span>
                       )}
                       <div className="config-model-suggestions">
-                        <span className="config-hint">Popular models:</span>
-                        {configDraft.provider === 'openai' && (
-                          <div className="model-chips">
-                            {['gpt-4o', 'gpt-4o-mini', 'o1', 'o3-mini'].map((m) => (
-                              <button key={m} className="model-chip" onClick={() => setConfigDraft({ ...configDraft, strong: m })}>{m}</button>
-                            ))}
-                          </div>
-                        )}
-                        {configDraft.provider === 'anthropic' && (
-                          <div className="model-chips">
-                            {['claude-opus-4-20250514', 'claude-sonnet-4-20250514', 'claude-haiku-4-5-20251001'].map((m) => (
-                              <button key={m} className="model-chip" onClick={() => setConfigDraft({ ...configDraft, strong: m })}>{m}</button>
-                            ))}
-                          </div>
-                        )}
-                        {configDraft.provider === 'google' && (
-                          <div className="model-chips">
-                            {['gemini-2.0-flash', 'gemini-2.0-pro', 'gemini-1.5-pro'].map((m) => (
-                              <button key={m} className="model-chip" onClick={() => setConfigDraft({ ...configDraft, strong: m })}>{m}</button>
-                            ))}
-                          </div>
-                        )}
-                        {configDraft.provider === 'mistral' && (
-                          <div className="model-chips">
-                            {['mistral-large-latest', 'mistral-medium-latest', 'mistral-small-latest'].map((m) => (
-                              <button key={m} className="model-chip" onClick={() => setConfigDraft({ ...configDraft, strong: m })}>{m}</button>
-                            ))}
-                          </div>
-                        )}
-                        {configDraft.provider === 'deepseek' && (
-                          <div className="model-chips">
-                            {['deepseek-chat', 'deepseek-coder'].map((m) => (
-                              <button key={m} className="model-chip" onClick={() => setConfigDraft({ ...configDraft, strong: m })}>{m}</button>
-                            ))}
-                          </div>
-                        )}
-                        {configDraft.provider === 'groq' && (
-                          <div className="model-chips">
-                            {['llama-3.3-70b-versatile', 'mixtral-8x7b-32768'].map((m) => (
-                              <button key={m} className="model-chip" onClick={() => setConfigDraft({ ...configDraft, strong: m })}>{m}</button>
-                            ))}
-                          </div>
-                        )}
-                        {configDraft.provider === 'ollama' && (
-                          <div className="model-chips">
-                            {['ollama/llama3.2', 'ollama/mistral', 'ollama/codellama'].map((m) => (
-                              <button key={m} className="model-chip" onClick={() => setConfigDraft({ ...configDraft, strong: m })}>{m}</button>
-                            ))}
-                          </div>
-                        )}
-                        {configDraft.provider === 'cohere' && (
-                          <div className="model-chips">
-                            {['command-r-plus', 'command-r', 'command-light'].map((m) => (
-                              <button key={m} className="model-chip" onClick={() => setConfigDraft({ ...configDraft, strong: m })}>{m}</button>
-                            ))}
-                          </div>
-                        )}
-                        {configDraft.provider === 'bedrock' && (
-                          <div className="model-chips">
-                            {['bedrock/anthropic.claude-sonnet-4-20250514-v1:0', 'bedrock/anthropic.claude-haiku-4-5-20251001-v1:0', 'bedrock/amazon.titan-text-express-v1'].map((m) => (
-                              <button key={m} className="model-chip" onClick={() => setConfigDraft({ ...configDraft, strong: m })}>{m}</button>
-                            ))}
-                          </div>
+                        <span className="config-hint">
+                          Available models{providerModels.length > 0 ? ` (${providerModels.length})` : ''}:
+                        </span>
+                        {modelsLoading ? (
+                          <span className="config-hint" style={{ fontStyle: 'italic' }}>Loading models...</span>
+                        ) : providerModels.length > 0 ? (
+                          <>
+                            {providerModels.length > 10 && (
+                              <input
+                                type="text"
+                                value={modelFilter}
+                                onChange={(e) => setModelFilter(e.target.value)}
+                                placeholder="Filter models..."
+                                className="model-filter-input"
+                                style={{ margin: '6px 0', padding: '4px 8px', fontSize: '0.85em', width: '100%', boxSizing: 'border-box' }}
+                              />
+                            )}
+                            <div className="model-chips">
+                              {providerModels
+                                .filter((m) => !modelFilter || m.toLowerCase().includes(modelFilter.toLowerCase()))
+                                .slice(0, 30)
+                                .map((m) => (
+                                  <button key={m} className="model-chip" onClick={() => setConfigDraft({ ...configDraft, strong: m })}>{m}</button>
+                                ))}
+                              {providerModels.filter((m) => !modelFilter || m.toLowerCase().includes(modelFilter.toLowerCase())).length > 30 && (
+                                <span className="config-hint" style={{ fontSize: '0.8em' }}>
+                                  ...and {providerModels.filter((m) => !modelFilter || m.toLowerCase().includes(modelFilter.toLowerCase())).length - 30} more (use filter)
+                                </span>
+                              )}
+                            </div>
+                          </>
+                        ) : (
+                          <span className="config-hint" style={{ fontStyle: 'italic' }}>No models found for this provider</span>
                         )}
                       </div>
                     </div>
