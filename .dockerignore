@@ -1,0 +1,17 @@
+.git
+.gitignore
+.env
+.venv
+.ruff_cache
+__pycache__
+*.pyc
+*.egg-info
+dist
+build
+data
+
+frontend/node_modules
+frontend/dist
+
+tests
+*.md
