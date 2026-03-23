@@ -432,6 +432,7 @@ function App() {
                       <option value="deepseek">DeepSeek</option>
                       <option value="groq">Groq</option>
                       <option value="ollama">Ollama (Local)</option>
+                      <option value="bedrock">AWS Bedrock</option>
                     </select>
                   </div>
                   {configDraft.provider && (
@@ -445,6 +446,7 @@ function App() {
                         {configDraft.provider === 'deepseek' && 'DEEPSEEK_API_KEY'}
                         {configDraft.provider === 'groq' && 'GROQ_API_KEY'}
                         {configDraft.provider === 'ollama' && 'No API key needed (runs locally)'}
+                        {configDraft.provider === 'bedrock' && 'AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (or use AWS profile)'}
                       </span>
                       <div className="config-model-suggestions">
                         <span className="config-hint">Popular models:</span>
@@ -500,6 +502,13 @@ function App() {
                         {configDraft.provider === 'cohere' && (
                           <div className="model-chips">
                             {['command-r-plus', 'command-r', 'command-light'].map((m) => (
+                              <button key={m} className="model-chip" onClick={() => setConfigDraft({ ...configDraft, strong: m })}>{m}</button>
+                            ))}
+                          </div>
+                        )}
+                        {configDraft.provider === 'bedrock' && (
+                          <div className="model-chips">
+                            {['bedrock/anthropic.claude-sonnet-4-20250514-v1:0', 'bedrock/anthropic.claude-haiku-4-5-20251001-v1:0', 'bedrock/amazon.titan-text-express-v1'].map((m) => (
                               <button key={m} className="model-chip" onClick={() => setConfigDraft({ ...configDraft, strong: m })}>{m}</button>
                             ))}
                           </div>
