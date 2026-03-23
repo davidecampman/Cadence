@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Any
 
@@ -12,6 +13,20 @@ from agent_one.core.types import Message, Role, ToolCall, ToolDefinition
 
 # Suppress LiteLLM's verbose logging
 litellm.suppress_debug_info = True
+
+
+def _configure_bedrock_env(bedrock_config) -> None:
+    """Set environment variables for LiteLLM's Bedrock integration.
+
+    LiteLLM reads AWS credentials from env vars. This applies the config
+    values only if they aren't already set (env vars take precedence).
+    """
+    if bedrock_config.region:
+        os.environ.setdefault("AWS_REGION_NAME", bedrock_config.region)
+    if bedrock_config.profile:
+        os.environ.setdefault("AWS_PROFILE", bedrock_config.profile)
+    if bedrock_config.role_arn:
+        os.environ.setdefault("AWS_ROLE_ARN", bedrock_config.role_arn)
 
 
 def _messages_to_dicts(messages: list[Message]) -> list[dict[str, Any]]:
@@ -88,7 +103,14 @@ def _extract_tool_calls_from_text(text: str) -> list[ToolCall]:
 _NATIVE_TOOL_USE_PREFIXES = (
     "gpt-4", "gpt-3.5", "claude-", "gemini-", "mistral",
     "command-r", "deepseek",
+    # Bedrock-hosted models (LiteLLM uses "bedrock/" prefix)
+    "bedrock/",
 )
+
+
+def _is_bedrock_model(model: str) -> bool:
+    """Check if a model string targets AWS Bedrock."""
+    return model.lower().startswith("bedrock/")
 
 
 def supports_native_tools(model: str) -> bool:
@@ -103,12 +125,20 @@ async def chat_completion(
     tools: list[ToolDefinition] | None = None,
     temperature: float = 0.7,
     max_tokens: int = 4096,
+    bedrock_config=None,
 ) -> tuple[str, list[ToolCall], dict[str, Any]]:
     """Call an LLM and return (text_response, tool_calls, usage_metadata).
 
     Uses native tool_use when the model supports it, otherwise falls back
     to freetext tool parsing.
+
+    For Bedrock models, either pass a bedrock_config or use the ``bedrock/``
+    model prefix with AWS credentials configured via environment variables.
     """
+    # Apply Bedrock env vars if a config is provided and the model targets Bedrock
+    if bedrock_config and _is_bedrock_model(model):
+        _configure_bedrock_env(bedrock_config)
+
     kwargs: dict[str, Any] = {
         "model": model,
         "messages": _messages_to_dicts(messages),

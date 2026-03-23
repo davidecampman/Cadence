@@ -15,7 +15,8 @@ from agent_one.core.types import (
     ToolDefinition,
     TraceStep,
 )
-from agent_one.core.config import Config, load_config
+from agent_one.core.config import Config, BedrockConfig, load_config
+from agent_one.core.llm import supports_native_tools, _is_bedrock_model
 from agent_one.core.trace import TraceLogger
 from agent_one.tools.base import Tool, ToolRegistry
 from agent_one.skills.loader import SkillLoader, SkillDefinition
@@ -213,3 +214,37 @@ def test_smart_router_selection():
     # Strong tasks → strong model
     assert router.select_model("code") == router.config.models.strong
     assert router.select_model("reason") == router.config.models.strong
+
+
+# --- Bedrock ---
+
+def test_bedrock_config_defaults():
+    cfg = BedrockConfig()
+    assert cfg.enabled is False
+    assert cfg.region == "us-east-1"
+    assert cfg.profile is None
+    assert cfg.role_arn is None
+
+
+def test_bedrock_config_in_models():
+    cfg = Config()
+    assert cfg.models.bedrock.enabled is False
+    # Bedrock config should be customizable
+    cfg2 = Config(models={"bedrock": {"enabled": True, "region": "eu-west-1"}})
+    assert cfg2.models.bedrock.enabled is True
+    assert cfg2.models.bedrock.region == "eu-west-1"
+
+
+def test_is_bedrock_model():
+    assert _is_bedrock_model("bedrock/anthropic.claude-sonnet-4-20250514-v1:0")
+    assert _is_bedrock_model("Bedrock/anthropic.claude-3-haiku")
+    assert not _is_bedrock_model("claude-sonnet-4-20250514")
+    assert not _is_bedrock_model("gpt-4o")
+
+
+def test_bedrock_native_tool_support():
+    assert supports_native_tools("bedrock/anthropic.claude-sonnet-4-20250514-v1:0")
+    assert supports_native_tools("bedrock/anthropic.claude-3-haiku-20240307-v1:0")
+    # Non-bedrock models should still work
+    assert supports_native_tools("claude-sonnet-4-20250514")
+    assert supports_native_tools("gpt-4o")

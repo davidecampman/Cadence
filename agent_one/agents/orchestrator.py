@@ -199,6 +199,7 @@ class Orchestrator:
             messages=[Message(role=Role.USER, content=planning_prompt)],
             temperature=0.3,
             max_tokens=1024,
+            bedrock_config=self.config.models.bedrock if self.config.models.bedrock.enabled else None,
         )
 
         if "SIMPLE" in text.upper():
@@ -281,6 +282,7 @@ class Orchestrator:
             model=self.config.models.strong,
             messages=[Message(role=Role.USER, content=synthesis_prompt)],
             temperature=0.5,
+            bedrock_config=self.config.models.bedrock if self.config.models.bedrock.enabled else None,
         )
         return text
 
@@ -299,6 +301,7 @@ class Orchestrator:
             messages=[Message(role=Role.USER, content=eval_prompt)],
             temperature=0.2,
             max_tokens=256,
+            bedrock_config=self.config.models.bedrock if self.config.models.bedrock.enabled else None,
         )
 
         if text.strip().upper().startswith("PASS"):

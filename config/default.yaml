@@ -13,6 +13,16 @@ models:
     - "gpt-4o"
     - "claude-sonnet-4-20250514"
 
+  # AWS Bedrock configuration
+  # To use Bedrock, set enabled: true and use "bedrock/" prefixed model names.
+  # e.g., strong: "bedrock/anthropic.claude-sonnet-4-20250514-v1:0"
+  # AWS credentials are resolved via the standard chain (env vars, profile, IAM role).
+  bedrock:
+    enabled: false
+    region: "us-east-1"
+    # profile: "my-aws-profile"   # Optional: AWS CLI profile name
+    # role_arn: "arn:aws:iam::..."  # Optional: IAM role to assume
+
 budget:
   max_tokens_per_task: 100000       # Per-task token ceiling
   max_tokens_per_session: 500000    # Per-session token ceiling

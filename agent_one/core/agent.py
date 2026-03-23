@@ -132,6 +132,7 @@ class Agent:
                 model=self.model,
                 messages=self._history,
                 tools=tool_defs if tool_defs else None,
+                bedrock_config=self.config.models.bedrock if self.config.models.bedrock.enabled else None,
             )
             self._total_tokens += usage.get("total_tokens", 0)
 

@@ -96,6 +96,7 @@ class SmartRouter:
                     tools=tools,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    bedrock_config=self.config.models.bedrock if self.config.models.bedrock.enabled else None,
                 )
                 latency = (time.time() - start) * 1000
                 self.stats.record(model, True, latency, usage.get("total_tokens", 0))
