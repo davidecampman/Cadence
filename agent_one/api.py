@@ -19,9 +19,12 @@ from agent_one.core.config import update_config as _update_config
 from agent_one.core.keystore import (
     save_key as _save_key,
     delete_key as _delete_key,
+    delete_bedrock_keys as _delete_bedrock_keys,
+    has_bedrock_keys as _has_bedrock_keys,
     list_providers as _list_providers,
     inject_keys_to_env,
     PROVIDER_ENV_VARS,
+    BEDROCK_KEYS,
 )
 from agent_one.core.types import TraceStep
 
@@ -184,19 +187,38 @@ class ApiKeyRequest(BaseModel):
     api_key: str
 
 
+class BedrockKeysRequest(BaseModel):
+    auth_type: str  # "api_key" or "iam"
+    api_key: str | None = None
+    access_key_id: str | None = None
+    secret_access_key: str | None = None
+
+
 @app.get("/api/keys")
 async def get_keys():
     """Return which providers have stored keys (never exposes actual keys)."""
     stored = _list_providers()
+    # Build providers dict, excluding bedrock sub-keys (they're grouped separately)
+    providers = {
+        name: {
+            "env_var": env_var,
+            "has_key": name in stored,
+        }
+        for name, env_var in PROVIDER_ENV_VARS.items()
+        if name not in BEDROCK_KEYS
+    }
+    # Add bedrock as a grouped provider
+    providers["bedrock"] = {
+        "env_var": "AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / BEDROCK_API_KEY",
+        "has_key": _has_bedrock_keys(),
+    }
+    # For the stored list, collapse bedrock sub-keys into "bedrock"
+    visible_stored = [s for s in stored if s not in BEDROCK_KEYS]
+    if _has_bedrock_keys():
+        visible_stored.append("bedrock")
     return {
-        "providers": {
-            name: {
-                "env_var": env_var,
-                "has_key": name in stored,
-            }
-            for name, env_var in PROVIDER_ENV_VARS.items()
-        },
-        "stored": stored,
+        "providers": providers,
+        "stored": visible_stored,
     }
 
 
@@ -215,10 +237,57 @@ async def post_key(req: ApiKeyRequest):
     return {"status": "saved", "provider": provider}
 
 
+@app.post("/api/keys/bedrock")
+async def post_bedrock_keys(req: BedrockKeysRequest):
+    """Store AWS Bedrock credentials (encrypted at rest).
+
+    Supports two auth types:
+    - "api_key": A long-term Bedrock API key
+    - "iam": AWS access key ID + secret access key
+    """
+    import os
+
+    # Clear any existing bedrock keys first so we don't mix auth types
+    _delete_bedrock_keys()
+    for k in BEDROCK_KEYS:
+        env_var = PROVIDER_ENV_VARS.get(k)
+        if env_var:
+            os.environ.pop(env_var, None)
+
+    if req.auth_type == "api_key":
+        if not req.api_key:
+            return {"error": "api_key is required for auth_type 'api_key'"}, 400
+        _save_key("bedrock_api_key", req.api_key)
+        os.environ["BEDROCK_API_KEY"] = req.api_key
+    elif req.auth_type == "iam":
+        if not req.access_key_id or not req.secret_access_key:
+            return {"error": "access_key_id and secret_access_key are required for auth_type 'iam'"}, 400
+        _save_key("bedrock_access_key_id", req.access_key_id)
+        _save_key("bedrock_secret_access_key", req.secret_access_key)
+        os.environ["AWS_ACCESS_KEY_ID"] = req.access_key_id
+        os.environ["AWS_SECRET_ACCESS_KEY"] = req.secret_access_key
+    else:
+        return {"error": f"Unknown auth_type: {req.auth_type}"}, 400
+
+    inject_keys_to_env()
+    return {"status": "saved", "provider": "bedrock", "auth_type": req.auth_type}
+
+
 @app.delete("/api/keys/{provider}")
 async def remove_key(provider: str):
     """Delete a stored API key."""
     provider = provider.lower()
+    # Handle bedrock as a group
+    if provider == "bedrock":
+        deleted = _delete_bedrock_keys()
+        if deleted:
+            import os
+            for k in BEDROCK_KEYS:
+                env_var = PROVIDER_ENV_VARS.get(k)
+                if env_var:
+                    os.environ.pop(env_var, None)
+        return {"status": "deleted" if deleted else "not_found", "provider": provider}
+
     deleted = _delete_key(provider)
     if deleted:
         # Remove from current environment too
