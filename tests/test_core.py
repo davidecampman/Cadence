@@ -20,6 +20,14 @@ from agent_one.core.trace import TraceLogger
 from agent_one.tools.base import Tool, ToolRegistry
 from agent_one.skills.loader import SkillLoader, SkillDefinition
 from agent_one.routing.router import ModelStats, SmartRouter
+from agent_one.tools.code_execution import (
+    _build_resource_limits,
+    _check_blocked,
+    _shell_quote,
+    _wrap_with_sandbox,
+    CodeExecutionTool,
+    ShellTool,
+)
 
 
 # --- Types ---
@@ -213,3 +221,89 @@ def test_smart_router_selection():
     # Strong tasks → strong model
     assert router.select_model("code") == router.config.models.strong
     assert router.select_model("reason") == router.config.models.strong
+
+
+# --- Execution Hardening ---
+
+def test_execution_config_defaults():
+    cfg = Config()
+    assert cfg.execution.max_memory_mb == 512
+    assert cfg.execution.max_cpu_seconds == 60
+    assert cfg.execution.max_file_descriptors == 256
+    assert cfg.execution.restrict_network is False
+    assert len(cfg.execution.blocked_commands) > 0
+
+
+def test_shell_quote():
+    assert _shell_quote("echo hello") == "'echo hello'"
+    assert _shell_quote("it's a test") == "'it'\\''s a test'"
+
+
+def test_build_resource_limits():
+    cfg = Config().execution
+    limits = _build_resource_limits(cfg)
+    assert "ulimit -v" in limits
+    assert "ulimit -t" in limits
+    assert "ulimit -n" in limits
+
+
+def test_build_resource_limits_disabled():
+    """Zero values should be omitted from the limits preamble."""
+    cfg = Config().execution
+    cfg.max_memory_mb = 0
+    cfg.max_cpu_seconds = 0
+    cfg.max_file_descriptors = 0
+    limits = _build_resource_limits(cfg)
+    assert limits == ""
+
+
+def test_check_blocked_match():
+    blocked = ["rm -rf /", "mkfs", "shutdown"]
+    assert _check_blocked("sudo rm -rf /", blocked) == "rm -rf /"
+    assert _check_blocked("mkfs.ext4 /dev/sda1", blocked) == "mkfs"
+    assert _check_blocked("SHUTDOWN now", blocked) == "shutdown"
+
+
+def test_check_blocked_safe():
+    blocked = ["rm -rf /", "mkfs"]
+    assert _check_blocked("rm -rf ./build", blocked) is None
+    assert _check_blocked("ls -la", blocked) is None
+    assert _check_blocked("echo hello", blocked) is None
+
+
+def test_wrap_with_sandbox_adds_ulimits():
+    cfg = Config().execution
+    result = _wrap_with_sandbox("echo hi", cfg)
+    assert "ulimit" in result
+    assert "echo hi" in result
+
+
+@pytest.mark.asyncio
+async def test_shell_tool_blocks_dangerous_commands():
+    tool = ShellTool()
+    result = await tool.run("test-id", {"command": "rm -rf /"})
+    assert not result.success
+    assert "Blocked" in result.output
+
+
+@pytest.mark.asyncio
+async def test_shell_tool_allows_safe_commands():
+    tool = ShellTool()
+    result = await tool.run("test-id", {"command": "echo hello"})
+    assert result.success
+    assert "hello" in result.output
+
+
+@pytest.mark.asyncio
+async def test_code_execution_tool_python():
+    tool = CodeExecutionTool()
+    result = await tool.run("test-id", {"language": "python", "code": "print(40 + 2)"})
+    assert result.success
+    assert "42" in result.output
+
+
+@pytest.mark.asyncio
+async def test_code_execution_tool_unsupported_language():
+    tool = CodeExecutionTool()
+    result = await tool.run("test-id", {"language": "cobol", "code": "DISPLAY 'HI'"})
+    assert "Unsupported language" in result.output
