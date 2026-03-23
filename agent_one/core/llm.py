@@ -149,9 +149,11 @@ async def chat_completion(
     For Bedrock models, either pass a bedrock_config or use the ``bedrock/``
     model prefix with AWS credentials configured via environment variables.
     """
-    # Apply Bedrock env vars if a config is provided and the model targets Bedrock
+    # Apply Bedrock env vars if a config is provided
     bedrock_extra: dict[str, Any] = {}
-    if bedrock_config and _is_bedrock_model(model):
+    if bedrock_config and bedrock_config.enabled:
+        if not _is_bedrock_model(model):
+            model = f"bedrock/{model}"
         bedrock_extra = _configure_bedrock_env(bedrock_config)
 
     kwargs: dict[str, Any] = {
