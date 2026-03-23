@@ -63,6 +63,7 @@ function App() {
   const [providerModels, setProviderModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelFilter, setModelFilter] = useState('');
+  const [modelTarget, setModelTarget] = useState<'strong' | 'fast' | 'embedding'>('strong');
   const [configDraft, setConfigDraft] = useState<{
     strong: string;
     fast: string;
@@ -682,6 +683,18 @@ function App() {
                           <span className="config-hint" style={{ fontStyle: 'italic' }}>Loading models...</span>
                         ) : providerModels.length > 0 ? (
                           <>
+                            <div className="model-target-selector">
+                              <span className="config-hint" style={{ marginRight: 8 }}>Assign to:</span>
+                              {(['strong', 'fast', 'embedding'] as const).map((tier) => (
+                                <button
+                                  key={tier}
+                                  className={`model-target-btn${modelTarget === tier ? ' active' : ''}`}
+                                  onClick={() => setModelTarget(tier)}
+                                >
+                                  {tier.charAt(0).toUpperCase() + tier.slice(1)}
+                                </button>
+                              ))}
+                            </div>
                             {providerModels.length > 10 && (
                               <input
                                 type="text"
@@ -697,7 +710,13 @@ function App() {
                                 .filter((m) => !modelFilter || m.toLowerCase().includes(modelFilter.toLowerCase()))
                                 .slice(0, 30)
                                 .map((m) => (
-                                  <button key={m} className="model-chip" onClick={() => setConfigDraft({ ...configDraft, strong: m })}>{m}</button>
+                                  <button
+                                    key={m}
+                                    className={`model-chip${m === configDraft[modelTarget] ? ' selected' : ''}`}
+                                    onClick={() => setConfigDraft({ ...configDraft, [modelTarget]: m })}
+                                  >
+                                    {m}
+                                  </button>
                                 ))}
                               {providerModels.filter((m) => !modelFilter || m.toLowerCase().includes(modelFilter.toLowerCase())).length > 30 && (
                                 <span className="config-hint" style={{ fontSize: '0.8em' }}>

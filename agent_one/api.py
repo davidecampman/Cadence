@@ -121,7 +121,19 @@ async def chat(req: ChatRequest):
     try:
         response = await agent_app.run(req.message)
     except Exception as e:
-        response = f"Error: {type(e).__name__}: {e}"
+        err_str = str(e)
+        if "AuthenticationError" in type(e).__name__ or "Missing" in err_str and "API Key" in err_str:
+            # Provide a helpful hint about configuring API keys
+            model_strong = agent_app.config.models.strong
+            model_fast = agent_app.config.models.fast
+            response = (
+                f"Error: {type(e).__name__}: {e}\n\n"
+                f"Hint: Your current models are strong={model_strong}, fast={model_fast}. "
+                f"Please ensure you have saved the correct API key for your chosen provider "
+                f"in the Config page, or change the model tier to a provider you have configured."
+            )
+        else:
+            response = f"Error: {type(e).__name__}: {e}"
 
     duration_ms = (time.time() - start) * 1000
     new_steps = agent_app.trace.steps[start_idx:]
