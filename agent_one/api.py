@@ -57,6 +57,7 @@ _ws_clients: set[WebSocket] = set()
 
 async def _broadcast_trace(step: TraceStep) -> None:
     """Send a trace step to all connected WebSocket clients."""
+    global _ws_clients
     data = step.model_dump()
     data["timestamp"] = step.timestamp
     msg = json.dumps({"type": "trace", "data": data})
