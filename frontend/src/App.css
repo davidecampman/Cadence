@@ -703,6 +703,87 @@
   color: var(--text-primary);
 }
 
+/* API Key management */
+.keys-stored-list {
+  margin-bottom: 16px;
+}
+
+.key-stored-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 6px;
+}
+
+.key-provider-name {
+  font-size: 13px;
+  font-weight: 500;
+  text-transform: capitalize;
+}
+
+.key-status-badge {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(52, 211, 153, 0.15);
+  color: var(--success);
+  font-weight: 600;
+}
+
+.key-delete-btn {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+
+.key-delete-btn:hover {
+  color: var(--error);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.key-input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.key-input-row input {
+  flex: 1;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.key-input-row input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.key-input-row input::placeholder {
+  color: var(--text-muted);
+}
+
+.key-save-btn {
+  white-space: nowrap;
+  padding: 10px 16px !important;
+  font-size: 12px !important;
+}
+
 @media (max-width: 768px) {
   .sidebar {
     display: none;
