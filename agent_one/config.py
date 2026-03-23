@@ -10,11 +10,20 @@ import yaml
 from pydantic import BaseModel, Field
 
 
+class BedrockConfig(BaseModel):
+    """AWS Bedrock provider configuration."""
+    enabled: bool = False
+    region: str = "us-east-1"
+    profile: str | None = None
+    role_arn: str | None = None
+
+
 class ModelConfig(BaseModel):
     strong: str = "claude-sonnet-4-20250514"
     fast: str = "claude-haiku-4-5-20251001"
     embedding: str = "text-embedding-3-small"
     fallback_chain: list[str] = Field(default_factory=lambda: ["gpt-4o", "claude-sonnet-4-20250514"])
+    bedrock: BedrockConfig = Field(default_factory=BedrockConfig)
 
 
 class BudgetConfig(BaseModel):
