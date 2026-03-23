@@ -867,6 +867,21 @@ body.light-mode .config-provider-info {
   font-weight: 600;
 }
 
+.bedrock-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 0.9em;
+}
+
+.bedrock-toggle-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 .config-actions {
   display: flex;
   gap: 10px;

@@ -184,6 +184,11 @@ async def chat_completion(
     if bedrock_config and bedrock_config.enabled:
         model = _to_bedrock_model(model)
         bedrock_extra = _configure_bedrock_env(bedrock_config)
+    elif _is_bedrock_model(model):
+        # Model is explicitly bedrock-prefixed; pass keystore credentials if available
+        bedrock_api_key = os.environ.get("BEDROCK_API_KEY")
+        if bedrock_api_key:
+            bedrock_extra["api_key"] = bedrock_api_key
 
     kwargs: dict[str, Any] = {
         "model": model,

@@ -283,6 +283,13 @@ async def post_bedrock_keys(req: BedrockKeysRequest):
         return {"error": f"Unknown auth_type: {req.auth_type}"}, 400
 
     inject_keys_to_env()
+
+    # Auto-enable bedrock in config when credentials are saved
+    agent_app = get_app()
+    if not agent_app.config.models.bedrock.enabled:
+        new_config = _update_config({"models": {"bedrock": {"enabled": True}}})
+        agent_app.config = new_config
+
     return {"status": "saved", "provider": "bedrock", "auth_type": req.auth_type}
 
 
@@ -299,6 +306,11 @@ async def remove_key(provider: str):
                 env_var = PROVIDER_ENV_VARS.get(k)
                 if env_var:
                     os.environ.pop(env_var, None)
+            # Auto-disable bedrock in config when credentials are removed
+            agent_app = get_app()
+            if agent_app.config.models.bedrock.enabled:
+                new_config = _update_config({"models": {"bedrock": {"enabled": False}}})
+                agent_app.config = new_config
         return {"status": "deleted" if deleted else "not_found", "provider": provider}
 
     deleted = _delete_key(provider)

@@ -69,6 +69,8 @@ function App() {
     fast: string;
     embedding: string;
     fallback_chain: string;
+    bedrock_enabled: boolean;
+    bedrock_region: string;
     provider: string;
     apiKey: string;
   } | null>(null);
@@ -126,6 +128,8 @@ function App() {
         fast: config.models.fast,
         embedding: config.models.embedding,
         fallback_chain: config.models.fallback_chain.join(', '),
+        bedrock_enabled: config.models.bedrock?.enabled ?? false,
+        bedrock_region: config.models.bedrock?.region ?? 'us-east-1',
         provider: '',
         apiKey: '',
       });
@@ -162,6 +166,10 @@ function App() {
           fast: configDraft.fast,
           embedding: configDraft.embedding,
           fallback_chain: fallback,
+          bedrock: {
+            enabled: configDraft.bedrock_enabled,
+            region: configDraft.bedrock_region,
+          },
         },
       });
       setConfig(newConfig);
@@ -794,6 +802,39 @@ function App() {
                   </div>
                 </div>
 
+                {/* AWS Bedrock */}
+                <div className="config-section">
+                  <h3>AWS Bedrock</h3>
+                  <p className="config-hint">
+                    When enabled, bare Claude model names (e.g. claude-sonnet-4-20250514) are
+                    automatically routed through AWS Bedrock. Save Bedrock credentials above first.
+                  </p>
+                  <div className="config-field">
+                    <label className="bedrock-toggle-label">
+                      <input
+                        type="checkbox"
+                        checked={configDraft.bedrock_enabled}
+                        onChange={(e) => setConfigDraft({ ...configDraft, bedrock_enabled: e.target.checked })}
+                      />
+                      <span>Enable Bedrock routing</span>
+                    </label>
+                  </div>
+                  {configDraft.bedrock_enabled && (
+                    <div className="config-field">
+                      <label>
+                        Region
+                        <span className="field-hint">AWS region for Bedrock API calls</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={configDraft.bedrock_region}
+                        onChange={(e) => setConfigDraft({ ...configDraft, bedrock_region: e.target.value })}
+                        placeholder="e.g. us-east-1"
+                      />
+                    </div>
+                  )}
+                </div>
+
                 {/* Save Button */}
                 <div className="config-actions">
                   <button
@@ -812,6 +853,8 @@ function App() {
                           fast: config.models.fast,
                           embedding: config.models.embedding,
                           fallback_chain: config.models.fallback_chain.join(', '),
+                          bedrock_enabled: config.models.bedrock?.enabled ?? false,
+                          bedrock_region: config.models.bedrock?.region ?? 'us-east-1',
                           provider: configDraft.provider,
                           apiKey: '',
                         });
