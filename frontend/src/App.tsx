@@ -19,6 +19,7 @@ import {
   type WsMessage,
   type KeysResponse,
 } from './api'
+import BackgroundCanvas from './BackgroundCanvas'
 import './App.css'
 
 type View = 'chat' | 'tools' | 'skills' | 'config';
@@ -33,6 +34,10 @@ interface ChatMessage {
 }
 
 function App() {
+  const [lightMode, setLightMode] = useState(() => {
+    const saved = localStorage.getItem('agent-one-theme');
+    return saved === 'light';
+  });
   const [view, setView] = useState<View>('chat');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -66,6 +71,12 @@ function App() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const traceEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Sync theme class on body
+  useEffect(() => {
+    document.body.classList.toggle('light-mode', lightMode);
+    localStorage.setItem('agent-one-theme', lightMode ? 'light' : 'dark');
+  }, [lightMode]);
 
   // Check health on mount
   useEffect(() => {
@@ -260,7 +271,9 @@ function App() {
   ];
 
   return (
-    <div className="app-layout">
+    <>
+      <BackgroundCanvas lightMode={lightMode} />
+      <div className="app-layout">
       {/* Sidebar */}
       <nav className="sidebar">
         <div className="sidebar-header">
@@ -317,8 +330,17 @@ function App() {
         </div>
 
         <div className="sidebar-footer">
-          <span className={`status-dot ${online ? 'online' : 'offline'}`} />
-          {online ? 'API Connected' : 'API Disconnected'}
+          <span className="sidebar-footer-left">
+            <span className={`status-dot ${online ? 'online' : 'offline'}`} />
+            {online ? 'API Connected' : 'API Disconnected'}
+          </span>
+          <button
+            className="theme-toggle"
+            onClick={() => setLightMode((prev) => !prev)}
+            title={lightMode ? 'Switch to dark mode' : 'Switch to light mode'}
+          >
+            {lightMode ? '\u263E' : '\u2600'}
+          </button>
         </div>
       </nav>
 
@@ -828,6 +850,7 @@ function App() {
         </div>
       </aside>
     </div>
+    </>
   );
 }
 
