@@ -15,11 +15,13 @@ from agent_one.core.types import Message, Role, ToolCall, ToolDefinition
 litellm.suppress_debug_info = True
 
 
-def _configure_bedrock_env(bedrock_config) -> None:
+def _configure_bedrock_env(bedrock_config) -> dict[str, Any]:
     """Set environment variables for LiteLLM's Bedrock integration.
 
     LiteLLM reads AWS credentials from env vars. This applies the config
     values only if they aren't already set (env vars take precedence).
+
+    Returns a dict of extra kwargs to pass to litellm.acompletion (e.g. api_key).
     """
     if bedrock_config.region:
         os.environ.setdefault("AWS_REGION_NAME", bedrock_config.region)
@@ -27,6 +29,15 @@ def _configure_bedrock_env(bedrock_config) -> None:
         os.environ.setdefault("AWS_PROFILE", bedrock_config.profile)
     if bedrock_config.role_arn:
         os.environ.setdefault("AWS_ROLE_ARN", bedrock_config.role_arn)
+    if bedrock_config.access_key_id:
+        os.environ.setdefault("AWS_ACCESS_KEY_ID", bedrock_config.access_key_id)
+    if bedrock_config.secret_access_key:
+        os.environ.setdefault("AWS_SECRET_ACCESS_KEY", bedrock_config.secret_access_key)
+
+    extra_kwargs: dict[str, Any] = {}
+    if bedrock_config.api_key:
+        extra_kwargs["api_key"] = bedrock_config.api_key
+    return extra_kwargs
 
 
 def _messages_to_dicts(messages: list[Message]) -> list[dict[str, Any]]:
@@ -136,14 +147,16 @@ async def chat_completion(
     model prefix with AWS credentials configured via environment variables.
     """
     # Apply Bedrock env vars if a config is provided and the model targets Bedrock
+    bedrock_extra: dict[str, Any] = {}
     if bedrock_config and _is_bedrock_model(model):
-        _configure_bedrock_env(bedrock_config)
+        bedrock_extra = _configure_bedrock_env(bedrock_config)
 
     kwargs: dict[str, Any] = {
         "model": model,
         "messages": _messages_to_dicts(messages),
         "temperature": temperature,
         "max_tokens": max_tokens,
+        **bedrock_extra,
     }
 
     use_native_tools = tools and supports_native_tools(model)

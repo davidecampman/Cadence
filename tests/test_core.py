@@ -232,6 +232,27 @@ def test_bedrock_config_defaults():
     assert cfg.region == "us-east-1"
     assert cfg.profile is None
     assert cfg.role_arn is None
+    assert cfg.access_key_id is None
+    assert cfg.secret_access_key is None
+    assert cfg.api_key is None
+
+
+def test_bedrock_config_with_api_key():
+    cfg = BedrockConfig(api_key="br-key-123", enabled=True)
+    assert cfg.api_key == "br-key-123"
+    assert cfg.enabled is True
+    assert cfg.access_key_id is None
+
+
+def test_bedrock_config_with_access_keys():
+    cfg = BedrockConfig(
+        access_key_id="AKIAIOSFODNN7EXAMPLE",
+        secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        enabled=True,
+    )
+    assert cfg.access_key_id == "AKIAIOSFODNN7EXAMPLE"
+    assert cfg.secret_access_key == "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    assert cfg.api_key is None
 
 
 def test_bedrock_config_in_models():

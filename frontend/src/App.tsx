@@ -446,7 +446,7 @@ function App() {
                         {configDraft.provider === 'deepseek' && 'DEEPSEEK_API_KEY'}
                         {configDraft.provider === 'groq' && 'GROQ_API_KEY'}
                         {configDraft.provider === 'ollama' && 'No API key needed (runs locally)'}
-                        {configDraft.provider === 'bedrock' && 'AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (or use AWS profile)'}
+                        {configDraft.provider === 'bedrock' && 'AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, AWS profile, or Bedrock API key'}
                       </span>
                       <div className="config-model-suggestions">
                         <span className="config-hint">Popular models:</span>
