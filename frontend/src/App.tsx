@@ -2,10 +2,12 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   sendMessage,
   fetchConfig,
+  updateConfig,
   fetchTools,
   fetchSkills,
   checkHealth,
   connectWebSocket,
+  type AppConfig,
   type ChatResponse,
   type TraceStep,
   type ToolInfo,
@@ -36,7 +38,17 @@ function App() {
   const [online, setOnline] = useState(false);
   const [tools, setTools] = useState<ToolInfo[]>([]);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
-  const [config, setConfig] = useState<Record<string, unknown> | null>(null);
+  const [config, setConfig] = useState<AppConfig | null>(null);
+  const [configSaving, setConfigSaving] = useState(false);
+  const [configSaved, setConfigSaved] = useState(false);
+  const [configDraft, setConfigDraft] = useState<{
+    strong: string;
+    fast: string;
+    embedding: string;
+    fallback_chain: string;
+    provider: string;
+    apiKey: string;
+  } | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const traceEndRef = useRef<HTMLDivElement>(null);
@@ -75,6 +87,47 @@ function App() {
   useEffect(() => {
     traceEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [traceSteps]);
+
+  // Sync config draft when config loads
+  useEffect(() => {
+    if (config && !configDraft) {
+      setConfigDraft({
+        strong: config.models.strong,
+        fast: config.models.fast,
+        embedding: config.models.embedding,
+        fallback_chain: config.models.fallback_chain.join(', '),
+        provider: '',
+        apiKey: '',
+      });
+    }
+  }, [config, configDraft]);
+
+  const handleConfigSave = useCallback(async () => {
+    if (!configDraft) return;
+    setConfigSaving(true);
+    setConfigSaved(false);
+    try {
+      const fallback = configDraft.fallback_chain
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const newConfig = await updateConfig({
+        models: {
+          strong: configDraft.strong,
+          fast: configDraft.fast,
+          embedding: configDraft.embedding,
+          fallback_chain: fallback,
+        },
+      });
+      setConfig(newConfig);
+      setConfigSaved(true);
+      setTimeout(() => setConfigSaved(false), 3000);
+    } catch (err) {
+      alert(`Failed to save: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setConfigSaving(false);
+    }
+  }, [configDraft]);
 
   const handleSend = useCallback(async (text?: string) => {
     const msg = text || input.trim();
@@ -349,9 +402,202 @@ function App() {
 
         {view === 'config' && (
           <div className="info-panel">
-            <h2>Configuration</h2>
-            {config ? (
-              <pre className="config-json">{JSON.stringify(config, null, 2)}</pre>
+            <h2>LLM Providers</h2>
+            <p className="config-subtitle">
+              Configure which models are used for each task tier. Agent One uses LiteLLM under the hood,
+              so any supported provider works (OpenAI, Anthropic, Google, Mistral, etc.).
+            </p>
+
+            {configDraft ? (
+              <div className="config-form">
+                {/* Provider API Key */}
+                <div className="config-section">
+                  <h3>Provider API Keys</h3>
+                  <p className="config-hint">
+                    API keys are read from environment variables (e.g. OPENAI_API_KEY, ANTHROPIC_API_KEY).
+                    Set them in your shell or .env file before starting the server.
+                  </p>
+                  <div className="config-field">
+                    <label>Provider</label>
+                    <select
+                      value={configDraft.provider}
+                      onChange={(e) => setConfigDraft({ ...configDraft, provider: e.target.value })}
+                    >
+                      <option value="">Select a provider...</option>
+                      <option value="openai">OpenAI</option>
+                      <option value="anthropic">Anthropic</option>
+                      <option value="google">Google (Gemini)</option>
+                      <option value="mistral">Mistral</option>
+                      <option value="cohere">Cohere</option>
+                      <option value="deepseek">DeepSeek</option>
+                      <option value="groq">Groq</option>
+                      <option value="ollama">Ollama (Local)</option>
+                    </select>
+                  </div>
+                  {configDraft.provider && (
+                    <div className="config-provider-info">
+                      <span className="config-env-var">
+                        {configDraft.provider === 'openai' && 'OPENAI_API_KEY'}
+                        {configDraft.provider === 'anthropic' && 'ANTHROPIC_API_KEY'}
+                        {configDraft.provider === 'google' && 'GEMINI_API_KEY'}
+                        {configDraft.provider === 'mistral' && 'MISTRAL_API_KEY'}
+                        {configDraft.provider === 'cohere' && 'COHERE_API_KEY'}
+                        {configDraft.provider === 'deepseek' && 'DEEPSEEK_API_KEY'}
+                        {configDraft.provider === 'groq' && 'GROQ_API_KEY'}
+                        {configDraft.provider === 'ollama' && 'No API key needed (runs locally)'}
+                      </span>
+                      <div className="config-model-suggestions">
+                        <span className="config-hint">Popular models:</span>
+                        {configDraft.provider === 'openai' && (
+                          <div className="model-chips">
+                            {['gpt-4o', 'gpt-4o-mini', 'o1', 'o3-mini'].map((m) => (
+                              <button key={m} className="model-chip" onClick={() => setConfigDraft({ ...configDraft, strong: m })}>{m}</button>
+                            ))}
+                          </div>
+                        )}
+                        {configDraft.provider === 'anthropic' && (
+                          <div className="model-chips">
+                            {['claude-opus-4-20250514', 'claude-sonnet-4-20250514', 'claude-haiku-4-5-20251001'].map((m) => (
+                              <button key={m} className="model-chip" onClick={() => setConfigDraft({ ...configDraft, strong: m })}>{m}</button>
+                            ))}
+                          </div>
+                        )}
+                        {configDraft.provider === 'google' && (
+                          <div className="model-chips">
+                            {['gemini-2.0-flash', 'gemini-2.0-pro', 'gemini-1.5-pro'].map((m) => (
+                              <button key={m} className="model-chip" onClick={() => setConfigDraft({ ...configDraft, strong: m })}>{m}</button>
+                            ))}
+                          </div>
+                        )}
+                        {configDraft.provider === 'mistral' && (
+                          <div className="model-chips">
+                            {['mistral-large-latest', 'mistral-medium-latest', 'mistral-small-latest'].map((m) => (
+                              <button key={m} className="model-chip" onClick={() => setConfigDraft({ ...configDraft, strong: m })}>{m}</button>
+                            ))}
+                          </div>
+                        )}
+                        {configDraft.provider === 'deepseek' && (
+                          <div className="model-chips">
+                            {['deepseek-chat', 'deepseek-coder'].map((m) => (
+                              <button key={m} className="model-chip" onClick={() => setConfigDraft({ ...configDraft, strong: m })}>{m}</button>
+                            ))}
+                          </div>
+                        )}
+                        {configDraft.provider === 'groq' && (
+                          <div className="model-chips">
+                            {['llama-3.3-70b-versatile', 'mixtral-8x7b-32768'].map((m) => (
+                              <button key={m} className="model-chip" onClick={() => setConfigDraft({ ...configDraft, strong: m })}>{m}</button>
+                            ))}
+                          </div>
+                        )}
+                        {configDraft.provider === 'ollama' && (
+                          <div className="model-chips">
+                            {['ollama/llama3.2', 'ollama/mistral', 'ollama/codellama'].map((m) => (
+                              <button key={m} className="model-chip" onClick={() => setConfigDraft({ ...configDraft, strong: m })}>{m}</button>
+                            ))}
+                          </div>
+                        )}
+                        {configDraft.provider === 'cohere' && (
+                          <div className="model-chips">
+                            {['command-r-plus', 'command-r', 'command-light'].map((m) => (
+                              <button key={m} className="model-chip" onClick={() => setConfigDraft({ ...configDraft, strong: m })}>{m}</button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Model Tiers */}
+                <div className="config-section">
+                  <h3>Model Tiers</h3>
+                  <p className="config-hint">
+                    Agent One routes tasks to different models based on complexity.
+                  </p>
+                  <div className="config-field">
+                    <label>
+                      Strong Model
+                      <span className="field-hint">Complex reasoning, code generation</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={configDraft.strong}
+                      onChange={(e) => setConfigDraft({ ...configDraft, strong: e.target.value })}
+                      placeholder="e.g. claude-sonnet-4-20250514"
+                    />
+                  </div>
+                  <div className="config-field">
+                    <label>
+                      Fast Model
+                      <span className="field-hint">Planning, memory queries, simple tasks</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={configDraft.fast}
+                      onChange={(e) => setConfigDraft({ ...configDraft, fast: e.target.value })}
+                      placeholder="e.g. claude-haiku-4-5-20251001"
+                    />
+                  </div>
+                  <div className="config-field">
+                    <label>
+                      Embedding Model
+                      <span className="field-hint">Memory embeddings and similarity search</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={configDraft.embedding}
+                      onChange={(e) => setConfigDraft({ ...configDraft, embedding: e.target.value })}
+                      placeholder="e.g. text-embedding-3-small"
+                    />
+                  </div>
+                </div>
+
+                {/* Fallback Chain */}
+                <div className="config-section">
+                  <h3>Fallback Chain</h3>
+                  <p className="config-hint">
+                    If the primary model fails, these models are tried in order (comma-separated).
+                  </p>
+                  <div className="config-field">
+                    <label>Fallback Models</label>
+                    <input
+                      type="text"
+                      value={configDraft.fallback_chain}
+                      onChange={(e) => setConfigDraft({ ...configDraft, fallback_chain: e.target.value })}
+                      placeholder="e.g. gpt-4o, claude-sonnet-4-20250514"
+                    />
+                  </div>
+                </div>
+
+                {/* Save Button */}
+                <div className="config-actions">
+                  <button
+                    className="config-save-btn"
+                    onClick={handleConfigSave}
+                    disabled={configSaving}
+                  >
+                    {configSaving ? 'Saving...' : configSaved ? 'Saved!' : 'Save Configuration'}
+                  </button>
+                  <button
+                    className="config-reset-btn"
+                    onClick={() => {
+                      if (config) {
+                        setConfigDraft({
+                          strong: config.models.strong,
+                          fast: config.models.fast,
+                          embedding: config.models.embedding,
+                          fallback_chain: config.models.fallback_chain.join(', '),
+                          provider: configDraft.provider,
+                          apiKey: '',
+                        });
+                      }
+                    }}
+                  >
+                    Reset
+                  </button>
+                </div>
+              </div>
             ) : (
               <p style={{ color: 'var(--text-muted)' }}>
                 {online ? 'Loading configuration...' : 'Connect to the API to see configuration.'}

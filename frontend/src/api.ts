@@ -39,9 +39,36 @@ export async function sendMessage(message: string, sessionId?: string): Promise<
   return res.json();
 }
 
-export async function fetchConfig(): Promise<Record<string, unknown>> {
+export interface ModelsConfig {
+  strong: string;
+  fast: string;
+  embedding: string;
+  fallback_chain: string[];
+}
+
+export interface AppConfig {
+  models: ModelsConfig;
+  budget: Record<string, unknown>;
+  agents: Record<string, unknown>;
+  memory: Record<string, unknown>;
+  execution: Record<string, unknown>;
+  skills: Record<string, unknown>;
+  logging: Record<string, unknown>;
+}
+
+export async function fetchConfig(): Promise<AppConfig> {
   const res = await fetch(`${API_BASE}/config`);
   if (!res.ok) throw new Error(`Config fetch failed: ${res.status}`);
+  return res.json();
+}
+
+export async function updateConfig(updates: Record<string, unknown>): Promise<AppConfig> {
+  const res = await fetch(`${API_BASE}/config`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ updates }),
+  });
+  if (!res.ok) throw new Error(`Config update failed: ${res.status}`);
   return res.json();
 }
 

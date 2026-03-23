@@ -114,3 +114,26 @@ def get_config() -> Config:
     if _config is None:
         _config = load_config()
     return _config
+
+
+def update_config(updates: dict[str, Any]) -> Config:
+    """Apply partial updates to the current config and persist to YAML."""
+    global _config
+    current = get_config()
+    current_data = current.model_dump()
+
+    # Deep merge updates into current config
+    for section, values in updates.items():
+        if section in current_data and isinstance(values, dict) and isinstance(current_data[section], dict):
+            current_data[section].update(values)
+        else:
+            current_data[section] = values
+
+    _config = Config(**current_data)
+
+    # Persist to default.yaml
+    if _DEFAULT_CONFIG_PATH.parent.exists():
+        with open(_DEFAULT_CONFIG_PATH, "w") as f:
+            yaml.safe_dump(current_data, f, default_flow_style=False, sort_keys=False)
+
+    return _config
