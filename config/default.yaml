@@ -33,9 +33,24 @@ memory:
   similarity_threshold: 0.7         # Minimum relevance score
 
 execution:
-  sandbox: "subprocess"             # subprocess | docker | none
   timeout_seconds: 120              # Default execution timeout
   max_output_bytes: 1048576         # 1MB output cap
+  restrict_network: false           # Use unshare --net to block network access
+  max_memory_mb: 512                # ulimit -v per process
+  max_cpu_seconds: 60               # ulimit -t per process
+  max_file_descriptors: 256         # ulimit -n per process
+  blocked_commands:                 # Shell commands that are always rejected
+    - "rm -rf /"
+    - "rm -rf /*"
+    - "mkfs"
+    - "dd if="
+    - ":(){"
+    - "fork bomb"
+    - "chmod -R 777 /"
+    - "shutdown"
+    - "reboot"
+    - "halt"
+    - "poweroff"
 
 skills:
   directories:
