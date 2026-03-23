@@ -18,6 +18,9 @@ class BedrockConfig(BaseModel):
     region: str = "us-east-1"
     profile: str | None = None  # AWS profile name (uses default chain if None)
     role_arn: str | None = None  # Optional IAM role to assume
+    access_key_id: str | None = None  # Explicit AWS access key ID
+    secret_access_key: str | None = None  # Explicit AWS secret access key
+    api_key: str | None = None  # Long-term Bedrock API key (alternative to IAM credentials)
 
 
 class ModelsConfig(BaseModel):
