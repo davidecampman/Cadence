@@ -127,6 +127,36 @@ def _is_bedrock_model(model: str) -> bool:
     return model.lower().startswith("bedrock/")
 
 
+# Mapping from standard Anthropic model names to Bedrock model IDs.
+# When bedrock is enabled and users specify a bare model name (e.g. "claude-sonnet-4-20250514"),
+# we need to convert it to the Bedrock-specific ID (e.g. "anthropic.claude-sonnet-4-20250514-v1:0").
+_BEDROCK_MODEL_MAP: dict[str, str] = {
+    "claude-sonnet-4-20250514": "anthropic.claude-sonnet-4-20250514-v1:0",
+    "claude-opus-4-20250514": "anthropic.claude-opus-4-20250514-v1:0",
+    "claude-haiku-4-5-20251001": "anthropic.claude-haiku-4-5-20251001-v1:0",
+    "claude-3-5-sonnet-20241022": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    "claude-3-5-haiku-20241022": "anthropic.claude-3-5-haiku-20241022-v1:0",
+    "claude-3-5-sonnet-20240620": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+    "claude-3-opus-20240229": "anthropic.claude-3-opus-20240229-v1:0",
+    "claude-3-sonnet-20240229": "anthropic.claude-3-sonnet-20240229-v1:0",
+    "claude-3-haiku-20240307": "anthropic.claude-3-haiku-20240307-v1:0",
+}
+
+
+def _to_bedrock_model(model: str) -> str:
+    """Convert a standard model name to a Bedrock-prefixed model ID.
+
+    If the model is already bedrock-prefixed, return as-is.
+    If the model name is in our mapping, convert it.
+    Otherwise, prepend "bedrock/" and hope litellm recognises it.
+    """
+    if _is_bedrock_model(model):
+        return model
+    if model in _BEDROCK_MODEL_MAP:
+        return f"bedrock/{_BEDROCK_MODEL_MAP[model]}"
+    return f"bedrock/{model}"
+
+
 def supports_native_tools(model: str) -> bool:
     """Check if a model likely supports native tool_use API."""
     model_lower = model.lower()
@@ -152,8 +182,7 @@ async def chat_completion(
     # Apply Bedrock env vars if a config is provided
     bedrock_extra: dict[str, Any] = {}
     if bedrock_config and bedrock_config.enabled:
-        if not _is_bedrock_model(model):
-            model = f"bedrock/{model}"
+        model = _to_bedrock_model(model)
         bedrock_extra = _configure_bedrock_env(bedrock_config)
 
     kwargs: dict[str, Any] = {
