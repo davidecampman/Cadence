@@ -135,6 +135,8 @@ def _extract_tool_calls_from_text(text: str) -> list[ToolCall]:
 _NATIVE_TOOL_USE_PREFIXES = (
     "gpt-4", "gpt-3.5", "claude-", "gemini-", "mistral",
     "command-r", "deepseek",
+    # OpenRouter-hosted models (LiteLLM uses "openrouter/" prefix)
+    "openrouter/",
     # Bedrock-hosted models (LiteLLM uses "bedrock/" prefix)
     "bedrock/",
 )
