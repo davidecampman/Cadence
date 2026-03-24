@@ -91,3 +91,17 @@ class ToolRegistry:
 
     def names(self) -> list[str]:
         return list(self._tools.keys())
+
+    def scoped_copy(self, agent_id: str) -> "ToolRegistry":
+        """Return a shallow copy with memory tools scoped to the given agent.
+
+        Tools that have a ``with_agent_id`` method get a scoped copy;
+        all other tools are shared by reference.
+        """
+        registry = ToolRegistry()
+        for name, tool in self._tools.items():
+            if hasattr(tool, "with_agent_id"):
+                registry._tools[name] = tool.with_agent_id(agent_id)
+            else:
+                registry._tools[name] = tool
+        return registry
