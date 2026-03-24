@@ -121,7 +121,19 @@ async def chat(req: ChatRequest):
     try:
         response = await agent_app.run(req.message)
     except Exception as e:
-        response = f"Error: {type(e).__name__}: {e}"
+        err_str = str(e)
+        if "AuthenticationError" in type(e).__name__ or "Missing" in err_str and "API Key" in err_str:
+            # Provide a helpful hint about configuring API keys
+            model_strong = agent_app.config.models.strong
+            model_fast = agent_app.config.models.fast
+            response = (
+                f"Error: {type(e).__name__}: {e}\n\n"
+                f"Hint: Your current models are strong={model_strong}, fast={model_fast}. "
+                f"Please ensure you have saved the correct API key for your chosen provider "
+                f"in the Config page, or change the model tier to a provider you have configured."
+            )
+        else:
+            response = f"Error: {type(e).__name__}: {e}"
 
     duration_ms = (time.time() - start) * 1000
     new_steps = agent_app.trace.steps[start_idx:]
@@ -148,8 +160,9 @@ async def put_config(req: ConfigUpdateRequest):
     """Update configuration (partial merge). Returns the full updated config."""
     agent_app = get_app()
     new_config = _update_config(req.updates)
-    # Update the live app's config reference
+    # Update the live app's config reference AND propagate to sub-components
     agent_app.config = new_config
+    agent_app.orchestrator.config = new_config
     agent_app.router = __import__(
         "agent_one.routing.router", fromlist=["SmartRouter"]
     ).SmartRouter(new_config)
@@ -271,6 +284,14 @@ async def post_bedrock_keys(req: BedrockKeysRequest):
         return {"error": f"Unknown auth_type: {req.auth_type}"}, 400
 
     inject_keys_to_env()
+
+    # Auto-enable bedrock in config when credentials are saved
+    agent_app = get_app()
+    if not agent_app.config.models.bedrock.enabled:
+        new_config = _update_config({"models": {"bedrock": {"enabled": True}}})
+        agent_app.config = new_config
+        agent_app.orchestrator.config = new_config
+
     return {"status": "saved", "provider": "bedrock", "auth_type": req.auth_type}
 
 
@@ -287,6 +308,12 @@ async def remove_key(provider: str):
                 env_var = PROVIDER_ENV_VARS.get(k)
                 if env_var:
                     os.environ.pop(env_var, None)
+            # Auto-disable bedrock in config when credentials are removed
+            agent_app = get_app()
+            if agent_app.config.models.bedrock.enabled:
+                new_config = _update_config({"models": {"bedrock": {"enabled": False}}})
+                agent_app.config = new_config
+                agent_app.orchestrator.config = new_config
         return {"status": "deleted" if deleted else "not_found", "provider": provider}
 
     deleted = _delete_key(provider)

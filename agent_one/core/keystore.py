@@ -145,7 +145,8 @@ def inject_keys_to_env() -> list[str]:
     injected: list[str] = []
     for provider, api_key in store.items():
         env_var = PROVIDER_ENV_VARS.get(provider)
-        if env_var and env_var not in os.environ:
+        if env_var and not os.environ.get(env_var):
+            # Inject if env var is missing OR empty
             os.environ[env_var] = api_key
             injected.append(provider)
     return injected

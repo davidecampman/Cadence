@@ -39,11 +39,17 @@ export async function sendMessage(message: string, sessionId?: string): Promise<
   return res.json();
 }
 
+export interface BedrockConfig {
+  enabled: boolean;
+  region: string;
+}
+
 export interface ModelsConfig {
   strong: string;
   fast: string;
   embedding: string;
   fallback_chain: string[];
+  bedrock: BedrockConfig;
 }
 
 export interface AppConfig {
