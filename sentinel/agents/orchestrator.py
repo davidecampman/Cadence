@@ -160,7 +160,11 @@ class Orchestrator:
             )
         return None
 
-    async def run(self, user_request: str) -> str:
+    async def run(
+        self,
+        user_request: str,
+        conversation_history: list[dict[str, str]] | None = None,
+    ) -> str:
         """Process a user request end-to-end."""
         # Check session budget before starting
         budget_error = self._check_session_budget()
@@ -172,13 +176,18 @@ class Orchestrator:
         # Reset DAG for each request
         self.dag = TaskDAG()
 
+        self._conversation_history = conversation_history or []
+
         # Phase 1: Plan — decompose into tasks
         tasks = await self._plan(user_request)
 
         if not tasks:
             # Simple request, no decomposition needed — just run directly
             agent = self._spawn_agent("general")
-            result = await agent.run(user_request)
+            result = await agent.run(
+                user_request,
+                conversation_history=self._conversation_history,
+            )
             self._session_tokens += agent._total_tokens
             return result
 
@@ -231,8 +240,23 @@ class Orchestrator:
 
         return final
 
+    def _format_history_block(self) -> str:
+        """Format prior conversation turns into a context block for prompts."""
+        if not self._conversation_history:
+            return ""
+        lines = []
+        for entry in self._conversation_history:
+            role = "User" if entry["role"] == "user" else "Assistant"
+            lines.append(f"{role}: {entry['content']}")
+        return (
+            "Here is the prior conversation for context:\n"
+            + "\n".join(lines)
+            + "\n\n"
+        )
+
     async def _plan(self, request: str) -> list[Task]:
         """Use the fast model to decompose a request into tasks."""
+        history_block = self._format_history_block()
         planning_prompt = (
             "You are a task planner. Given a user request, decide if it needs to be broken "
             "into subtasks. If it's simple enough for one agent, return SIMPLE.\n\n"
@@ -241,6 +265,7 @@ class Orchestrator:
             '"dependencies": []},\n  ...\n]\n\n'
             "Dependencies are indices (0-based) of tasks that must complete first.\n"
             "Keep it minimal — don't over-decompose.\n\n"
+            f"{history_block}"
             f"User request: {request}"
         )
 
@@ -324,7 +349,9 @@ class Orchestrator:
         result_block = "\n\n".join(
             f"### Task Result\n{text}" for text in results.values()
         )
+        history_block = self._format_history_block()
         synthesis_prompt = (
+            f"{history_block}"
             f"The user asked: {request}\n\n"
             f"Multiple agents worked on subtasks. Here are their results:\n\n{result_block}\n\n"
             "Synthesize these into a single, coherent response to the user's original request. "

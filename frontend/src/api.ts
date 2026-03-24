@@ -5,6 +5,8 @@ export interface ChatResponse {
   session_id: string;
   trace_steps: TraceStep[];
   duration_ms: number;
+  context_turns: number;
+  max_context_turns: number;
 }
 
 export interface TraceStep {
@@ -84,12 +86,19 @@ export interface MemoryConfig {
   similarity_threshold: number;
 }
 
+export interface ConversationConfig {
+  max_history_turns: number;
+  compression_enabled: boolean;
+  compression_threshold: number;
+}
+
 export interface AppConfig {
   models: ModelsConfig;
   budget: BudgetConfig;
   agents: AgentsConfig;
   memory: MemoryConfig;
   execution: ExecutionConfig;
+  conversation: ConversationConfig;
   skills: Record<string, unknown>;
   logging: Record<string, unknown>;
 }
