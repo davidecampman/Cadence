@@ -647,6 +647,7 @@ function App() {
                       <option value="cohere">Cohere</option>
                       <option value="deepseek">DeepSeek</option>
                       <option value="groq">Groq</option>
+                      <option value="openrouter">OpenRouter</option>
                       <option value="ollama">Ollama (Local)</option>
                       <option value="bedrock">AWS Bedrock</option>
                     </select>

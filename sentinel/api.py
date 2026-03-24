@@ -376,6 +376,7 @@ async def list_models(provider: str, tier: str | None = None):
         "cohere": {"prefixes": ["command-", "embed-"]},
         "deepseek": {"prefixes": ["deepseek-"], "litellm_prefix": "deepseek/"},
         "groq": {"litellm_prefix": "groq/"},
+        "openrouter": {"litellm_prefix": "openrouter/"},
         "ollama": {"litellm_prefix": "ollama/"},
         "bedrock": {"litellm_prefix": "bedrock/"},
     }
