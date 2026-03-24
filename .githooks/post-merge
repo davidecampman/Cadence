@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Git post-merge hook — runs after every git pull
+exec "$(dirname "$0")/../scripts/post-pull.sh"
