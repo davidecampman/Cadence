@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from sentinel.core.agent import Agent
     from sentinel.core.config import Config
     from sentinel.core.trace import TraceLogger
+    from sentinel.skills.loader import SkillLoader
     from sentinel.tools.base import ToolRegistry
 
 
@@ -49,12 +50,14 @@ class DelegateTool(Tool):
         config: "Config",
         parent_depth: int = 0,
         max_depth: int = 5,
+        skill_loader: "SkillLoader | None" = None,
     ):
         self._tool_registry = tool_registry
         self._trace = trace
         self._config = config
         self._parent_depth = parent_depth
         self._max_depth = max_depth
+        self._skill_loader = skill_loader
 
     async def execute(self, task: str, role: str = "general") -> str:
         if self._parent_depth >= self._max_depth:
@@ -70,6 +73,7 @@ class DelegateTool(Tool):
             trace=self._trace,
             config=self._config,
             depth=self._parent_depth + 1,
+            skill_loader=self._skill_loader,
         )
 
         self._trace.action(

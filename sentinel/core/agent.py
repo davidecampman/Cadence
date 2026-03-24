@@ -17,6 +17,7 @@ from sentinel.core.types import (
     TaskStatus,
     ToolCall,
 )
+from sentinel.skills.loader import SkillLoader
 from sentinel.tools.base import Tool, ToolRegistry
 
 
@@ -40,6 +41,7 @@ class Agent:
         agent_id: str | None = None,
         parent_id: str | None = None,
         depth: int = 0,
+        skill_loader: SkillLoader | None = None,
     ):
         self.id = agent_id or f"{role.name}-{str(uuid.uuid4())[:6]}"
         self.role = role
@@ -48,6 +50,7 @@ class Agent:
         self.config = config or get_config()
         self.parent_id = parent_id
         self.depth = depth
+        self.skill_loader = skill_loader
 
         self._history: list[Message] = []
         self._total_tokens: int = 0
@@ -59,9 +62,9 @@ class Agent:
         return self.role.model_override or self.config.models.strong
 
     def _system_prompt(self) -> str:
-        """Build the system prompt for this agent."""
+        """Build the system prompt for this agent, including any loaded skills."""
         tool_names = ", ".join(self.tools.names())
-        return (
+        prompt = (
             f"You are '{self.role.name}', an AI agent.\n"
             f"Role: {self.role.description}\n\n"
             f"Available tools: [{tool_names}]\n\n"
@@ -73,6 +76,25 @@ class Agent:
             "- Do NOT guess when you can look things up.\n"
             "- Be concise. Lead with the answer.\n"
         )
+
+        # Append skill instructions if a skill loader is available
+        if self.skill_loader:
+            skill_prompts = self._build_skill_prompt()
+            if skill_prompts:
+                prompt += f"\n## Skills\n{skill_prompts}\n"
+
+        return prompt
+
+    def _build_skill_prompt(self) -> str:
+        """Collect instructions from all loaded skills (with dependency resolution)."""
+        if not self.skill_loader:
+            return ""
+        parts: list[str] = []
+        for skill in self.skill_loader.all_skills.values():
+            prompt = self.skill_loader.get_skill_prompt(skill.name)
+            if prompt:
+                parts.append(prompt)
+        return "\n".join(parts)
 
     def _check_loop_detection(self) -> bool:
         """Detect if the agent is stuck in a loop by checking recent outputs."""
@@ -94,6 +116,9 @@ class Agent:
     async def run(self, task: str) -> str:
         """Execute the agent loop on a task. Returns the final response."""
         self.trace.observation(self.id, f"Task received: {task}")
+
+        # Scope memory tools to this agent's namespace
+        scoped_tools = self.tools.scoped_copy(self.id)
 
         # Initialize with system prompt
         self._history = [
@@ -121,7 +146,7 @@ class Agent:
                 )
 
             # Get available tool definitions for this agent's permission tier
-            tool_defs = self.tools.definitions(
+            tool_defs = scoped_tools.definitions(
                 max_tier=self.role.permission_tier,
                 allowed_names=self.role.allowed_tools,
             )
@@ -152,7 +177,7 @@ class Agent:
             # Execute tool calls
             for tc in tool_calls:
                 self.trace.action(self.id, f"Tool: {tc.name}({_summarize_args(tc.arguments)})")
-                tool = self.tools.get(tc.name)
+                tool = scoped_tools.get(tc.name)
                 if tool is None:
                     result_text = f"Unknown tool: {tc.name}"
                     self.trace.error(self.id, result_text)

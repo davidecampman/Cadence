@@ -52,6 +52,12 @@ export interface ModelsConfig {
   bedrock: BedrockConfig;
 }
 
+export interface BudgetConfig {
+  max_tokens_per_task: number;
+  max_tokens_per_session: number;
+  warn_at_percentage: number;
+}
+
 export interface ExecutionConfig {
   timeout_seconds: number;
   max_output_bytes: number;
@@ -69,11 +75,20 @@ export interface AgentsConfig {
   max_iterations_per_task: number;
 }
 
+export interface MemoryConfig {
+  backend: string;
+  persist_dir: string;
+  default_namespace: string;
+  decay_rate: number;
+  max_results: number;
+  similarity_threshold: number;
+}
+
 export interface AppConfig {
   models: ModelsConfig;
-  budget: Record<string, unknown>;
+  budget: BudgetConfig;
   agents: AgentsConfig;
-  memory: Record<string, unknown>;
+  memory: MemoryConfig;
   execution: ExecutionConfig;
   skills: Record<string, unknown>;
   logging: Record<string, unknown>;

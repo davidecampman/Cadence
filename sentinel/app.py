@@ -40,6 +40,7 @@ class SentinelApp:
             tool_registry=self.tools,
             trace=self.trace,
             config=self.config,
+            skill_loader=self.skills,
         )
 
     def _build_tool_registry(self) -> ToolRegistry:
@@ -97,6 +98,7 @@ class SentinelApp:
             trace=self.trace,
             config=self.config,
             max_depth=self.config.agents.max_depth,
+            skill_loader=self.skills,
         ))
 
         return registry

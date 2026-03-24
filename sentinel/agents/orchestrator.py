@@ -17,6 +17,7 @@ from sentinel.core.types import (
     Task,
     TaskStatus,
 )
+from sentinel.skills.loader import SkillLoader
 from sentinel.tools.base import ToolRegistry
 
 
@@ -128,15 +129,48 @@ class Orchestrator:
         tool_registry: ToolRegistry,
         trace: TraceLogger,
         config: Config | None = None,
+        skill_loader: SkillLoader | None = None,
     ):
         self.tools = tool_registry
         self.trace = trace
         self.config = config or get_config()
+        self.skill_loader = skill_loader
         self.dag = TaskDAG()
+        self._session_tokens: int = 0
+
+    @property
+    def session_tokens(self) -> int:
+        """Total tokens consumed across all agents in this session."""
+        return self._session_tokens
+
+    def _check_session_budget(self) -> str | None:
+        """Return an error message if session budget is exceeded, else None."""
+        limit = self.config.budget.max_tokens_per_session
+        if self._session_tokens >= limit:
+            return (
+                f"Session token budget exhausted ({self._session_tokens:,} / {limit:,} tokens). "
+                "Please start a new session."
+            )
+        warn_pct = self.config.budget.warn_at_percentage
+        if warn_pct and self._session_tokens >= limit * warn_pct / 100:
+            self.trace.thought(
+                "orchestrator",
+                f"Session budget warning: {self._session_tokens:,} / {limit:,} tokens "
+                f"({self._session_tokens * 100 // limit}% used)",
+            )
+        return None
 
     async def run(self, user_request: str) -> str:
         """Process a user request end-to-end."""
+        # Check session budget before starting
+        budget_error = self._check_session_budget()
+        if budget_error:
+            return budget_error
+
         self.trace.observation("orchestrator", f"Request: {user_request}")
+
+        # Reset DAG for each request
+        self.dag = TaskDAG()
 
         # Phase 1: Plan — decompose into tasks
         tasks = await self._plan(user_request)
@@ -144,7 +178,9 @@ class Orchestrator:
         if not tasks:
             # Simple request, no decomposition needed — just run directly
             agent = self._spawn_agent("general")
-            return await agent.run(user_request)
+            result = await agent.run(user_request)
+            self._session_tokens += agent._total_tokens
+            return result
 
         for task in tasks:
             self.dag.add(task)
@@ -156,6 +192,17 @@ class Orchestrator:
         max_parallel = self.config.agents.max_parallel
 
         while not self.dag.all_completed():
+            # Check budget between batches
+            budget_error = self._check_session_budget()
+            if budget_error:
+                self.trace.error("orchestrator", "Session token budget exceeded during execution")
+                # Mark remaining pending tasks as failed
+                for t in self.dag._tasks.values():
+                    if t.status == TaskStatus.PENDING:
+                        t.status = TaskStatus.FAILED
+                        t.result = "Skipped — session budget exceeded"
+                break
+
             ready = self.dag.ready_tasks()
             if not ready:
                 # Check for deadlock
@@ -197,13 +244,14 @@ class Orchestrator:
             f"User request: {request}"
         )
 
-        text, _, _ = await chat_completion(
+        text, _, usage = await chat_completion(
             model=self.config.models.fast,
             messages=[Message(role=Role.USER, content=planning_prompt)],
             temperature=0.3,
             max_tokens=1024,
             bedrock_config=self.config.models.bedrock if self.config.models.bedrock.enabled else None,
         )
+        self._session_tokens += usage.get("total_tokens", 0)
 
         if "SIMPLE" in text.upper():
             return []
@@ -265,6 +313,8 @@ class Orchestrator:
             task.result = f"Error: {e}"
             results[task.id] = task.result
             self.trace.error("orchestrator", f"Task [{task.id[:6]}] failed: {e}")
+        finally:
+            self._session_tokens += agent._total_tokens
 
     async def _synthesize(self, request: str, results: dict[str, str]) -> str:
         """Combine task results into a coherent final response."""
@@ -281,12 +331,13 @@ class Orchestrator:
             "Be concise. Don't mention the subtask structure."
         )
 
-        text, _, _ = await chat_completion(
+        text, _, usage = await chat_completion(
             model=self.config.models.strong,
             messages=[Message(role=Role.USER, content=synthesis_prompt)],
             temperature=0.5,
             bedrock_config=self.config.models.bedrock if self.config.models.bedrock.enabled else None,
         )
+        self._session_tokens += usage.get("total_tokens", 0)
         return text
 
     async def _evaluate(self, request: str, response: str) -> str:
@@ -299,13 +350,14 @@ class Orchestrator:
             "If no, reply: FAIL: <brief explanation of what's missing or wrong>"
         )
 
-        text, _, _ = await chat_completion(
+        text, _, usage = await chat_completion(
             model=self.config.models.fast,
             messages=[Message(role=Role.USER, content=eval_prompt)],
             temperature=0.2,
             max_tokens=256,
             bedrock_config=self.config.models.bedrock if self.config.models.bedrock.enabled else None,
         )
+        self._session_tokens += usage.get("total_tokens", 0)
 
         if text.strip().upper().startswith("PASS"):
             self.trace.result("orchestrator", "Self-evaluation: PASS")
@@ -323,4 +375,5 @@ class Orchestrator:
             tool_registry=self.tools,
             trace=self.trace,
             config=self.config,
+            skill_loader=self.skill_loader,
         )
