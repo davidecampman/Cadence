@@ -165,14 +165,15 @@ def _to_bedrock_model(model: str) -> str:
     """Convert a standard model name to a Bedrock-prefixed model ID.
 
     If the model is already bedrock-prefixed, return as-is.
-    If the model name is in our mapping, convert it.
-    Otherwise, prepend "bedrock/" and hope litellm recognises it.
+    If the model name is in our mapping, convert it using the converse route.
+    Otherwise, prepend "bedrock/converse/" so LiteLLM uses the recommended
+    Bedrock converse API path.
     """
     if _is_bedrock_model(model):
         return model
     if model in _BEDROCK_MODEL_MAP:
-        return f"bedrock/{_BEDROCK_MODEL_MAP[model]}"
-    return f"bedrock/{model}"
+        return f"bedrock/converse/{_BEDROCK_MODEL_MAP[model]}"
+    return f"bedrock/converse/{model}"
 
 
 def supports_native_tools(model: str) -> bool:
