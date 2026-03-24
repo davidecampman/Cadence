@@ -98,6 +98,14 @@ class ChatResponse(BaseModel):
     duration_ms: float
 
 
+# --- Per-session conversation history ---
+# Stores (role, content) tuples keyed by session_id so that follow-up
+# messages carry prior context to the LLM.
+_session_history: dict[str, list[dict[str, str]]] = {}
+
+MAX_HISTORY_TURNS = 50  # keep last N user+assistant pairs per session
+
+
 # --- REST endpoints ---
 
 @app.on_event("startup")
@@ -115,12 +123,15 @@ async def chat(req: ChatRequest):
     agent_app = get_app()
     session_id = req.session_id or str(uuid.uuid4())[:8]
 
+    # Retrieve prior conversation history for this session
+    history = _session_history.get(session_id, [])
+
     # Track trace steps for this request
     start_idx = len(agent_app.trace.steps)
     start = time.time()
 
     try:
-        response = await agent_app.run(req.message)
+        response = await agent_app.run(req.message, conversation_history=history)
     except Exception as e:
         err_str = str(e)
         if "AuthenticationError" in type(e).__name__ or "Missing" in err_str and "API Key" in err_str:
@@ -135,6 +146,14 @@ async def chat(req: ChatRequest):
             )
         else:
             response = f"Error: {type(e).__name__}: {e}"
+
+    # Persist this exchange in session history
+    history.append({"role": "user", "content": req.message})
+    history.append({"role": "assistant", "content": response})
+    # Trim to keep only the last N turns (each turn = user + assistant = 2 entries)
+    if len(history) > MAX_HISTORY_TURNS * 2:
+        history = history[-(MAX_HISTORY_TURNS * 2):]
+    _session_history[session_id] = history
 
     duration_ms = (time.time() - start) * 1000
     new_steps = agent_app.trace.steps[start_idx:]

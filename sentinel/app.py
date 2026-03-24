@@ -103,9 +103,15 @@ class SentinelApp:
 
         return registry
 
-    async def run(self, user_input: str) -> str:
+    async def run(
+        self,
+        user_input: str,
+        conversation_history: list[dict[str, str]] | None = None,
+    ) -> str:
         """Process a user request through the orchestrator."""
-        return await self.orchestrator.run(user_input)
+        return await self.orchestrator.run(
+            user_input, conversation_history=conversation_history or []
+        )
 
     def discover_skills(self) -> int:
         """Load skills from configured directories."""

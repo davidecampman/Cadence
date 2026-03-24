@@ -113,18 +113,29 @@ class Agent:
                 return True
         return False
 
-    async def run(self, task: str) -> str:
+    async def run(
+        self,
+        task: str,
+        conversation_history: list[dict[str, str]] | None = None,
+    ) -> str:
         """Execute the agent loop on a task. Returns the final response."""
         self.trace.observation(self.id, f"Task received: {task}")
 
         # Scope memory tools to this agent's namespace
         scoped_tools = self.tools.scoped_copy(self.id)
 
-        # Initialize with system prompt
+        # Initialize with system prompt, prior conversation context, and current task
         self._history = [
             Message(role=Role.SYSTEM, content=self._system_prompt()),
-            Message(role=Role.USER, content=task),
         ]
+
+        # Inject prior conversation turns so the agent knows what was discussed
+        for entry in (conversation_history or []):
+            role = Role.USER if entry["role"] == "user" else Role.ASSISTANT
+            self._history.append(Message(role=role, content=entry["content"]))
+
+        # Add the current user message
+        self._history.append(Message(role=Role.USER, content=task))
 
         max_iter = self.config.agents.max_iterations_per_task
 
