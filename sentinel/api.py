@@ -31,6 +31,7 @@ from sentinel.core.keystore import (
     BEDROCK_KEYS,
 )
 from sentinel.core.types import TraceStep
+from sentinel.storage.chat_store import ChatStore, ChatMessageRecord
 
 app = FastAPI(title="Sentinel", version="0.1.0")
 
@@ -43,6 +44,7 @@ app.add_middleware(
 
 # --- Global app instance ---
 _agent_app: SentinelApp | None = None
+_chat_store: ChatStore | None = None
 
 
 def get_app() -> SentinelApp:
@@ -53,6 +55,13 @@ def get_app() -> SentinelApp:
         # Disable console printing for API mode
         _agent_app.trace._console = False
     return _agent_app
+
+
+def get_chat_store() -> ChatStore:
+    global _chat_store
+    if _chat_store is None:
+        _chat_store = ChatStore()
+    return _chat_store
 
 
 # --- WebSocket connections for live trace streaming ---
@@ -104,13 +113,7 @@ class ChatResponse(BaseModel):
 
 
 # --- Per-session conversation history ---
-# Stores (role, content) tuples keyed by session_id so that follow-up
-# messages carry prior context to the LLM.
-_session_history: dict[str, list[dict[str, str]]] = {}
-
-# Per-session compressed summary of older conversation turns.
-# When compression fires, older turns are replaced by a single summary.
-_session_summaries: dict[str, str] = {}
+# Now backed by SQLite via ChatStore. In-memory dicts removed.
 
 
 # --- REST endpoints ---
@@ -155,7 +158,8 @@ async def _compress_history(
     old_text = "\n".join(old_text_parts)
 
     # Prepend any existing summary so we don't lose earlier context
-    existing_summary = _session_summaries.get(session_id, "")
+    store = get_chat_store()
+    existing_summary = store.get_session_summary(session_id)
     context_to_compress = ""
     if existing_summary:
         context_to_compress += f"[Previous summary]: {existing_summary}\n\n"
@@ -180,15 +184,16 @@ async def _compress_history(
                 else None
             ),
         )
-        _session_summaries[session_id] = summary.strip()
+        store.save_session_summary(session_id, summary.strip())
     except Exception:
         # If compression fails, fall back to hard truncation
-        _session_summaries[session_id] = existing_summary
+        store.save_session_summary(session_id, existing_summary)
         return recent_turns
 
     # Return summary as a system-level context entry + recent verbatim turns
+    final_summary = store.get_session_summary(session_id)
     compressed = [
-        {"role": "assistant", "content": f"[Conversation summary]: {_session_summaries[session_id]}"},
+        {"role": "assistant", "content": f"[Conversation summary]: {final_summary}"},
     ]
     compressed.extend(recent_turns)
     return compressed
@@ -197,11 +202,12 @@ async def _compress_history(
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     agent_app = get_app()
+    store = get_chat_store()
     conv_config = agent_app.config.conversation
     session_id = req.session_id or str(uuid.uuid4())[:8]
 
-    # Retrieve prior conversation history for this session
-    history = list(_session_history.get(session_id, []))
+    # Retrieve prior conversation history from persistent store
+    history = list(store.get_session_history(session_id))
 
     # Track trace steps for this request
     start_idx = len(agent_app.trace.steps)
@@ -238,7 +244,10 @@ async def chat(req: ChatRequest):
     if len(history) > max_entries:
         history = history[-max_entries:]
 
-    _session_history[session_id] = history
+    store.save_session_history(
+        session_id, history,
+        summary=store.get_session_summary(session_id),
+    )
 
     duration_ms = (time.time() - start) * 1000
     new_steps = agent_app.trace.steps[start_idx:]
@@ -248,9 +257,94 @@ async def chat(req: ChatRequest):
         session_id=session_id,
         trace_steps=[s.model_dump() for s in new_steps],
         duration_ms=duration_ms,
-        context_turns=len(_session_history[session_id]) // 2,
+        context_turns=len(history) // 2,
         max_context_turns=conv_config.max_history_turns,
     )
+
+
+# --- Chat persistence CRUD endpoints ---
+
+class CreateChatRequest(BaseModel):
+    id: str | None = None
+    title: str = "New Chat"
+    created_at: float | None = None
+
+
+class UpdateChatRequest(BaseModel):
+    title: str | None = None
+    session_id: str | None = None
+
+
+class AddMessageRequest(BaseModel):
+    id: str
+    role: str
+    content: str
+    timestamp: float
+    duration_ms: float | None = None
+    trace_steps: list[dict] | None = None
+
+
+@app.get("/api/chats")
+async def list_chats():
+    """List all chats (metadata only, no messages)."""
+    store = get_chat_store()
+    chats = store.list_chats()
+    return [c.model_dump(exclude={"messages"}) for c in chats]
+
+
+@app.get("/api/chats/{chat_id}")
+async def get_single_chat(chat_id: str):
+    """Get a chat with all its messages."""
+    store = get_chat_store()
+    chat = store.get_chat(chat_id)
+    if not chat:
+        return {"error": "Chat not found"}, 404
+    return chat.model_dump()
+
+
+@app.post("/api/chats")
+async def create_chat(req: CreateChatRequest):
+    """Create a new chat."""
+    store = get_chat_store()
+    chat = store.create_chat(
+        chat_id=req.id, title=req.title, created_at=req.created_at
+    )
+    return chat.model_dump()
+
+
+@app.put("/api/chats/{chat_id}")
+async def update_single_chat(chat_id: str, req: UpdateChatRequest):
+    """Update chat metadata."""
+    store = get_chat_store()
+    chat = store.update_chat(chat_id, title=req.title, session_id=req.session_id)
+    if not chat:
+        return {"error": "Chat not found"}, 404
+    return chat.model_dump()
+
+
+@app.delete("/api/chats/{chat_id}")
+async def delete_single_chat(chat_id: str):
+    """Delete a chat and all its messages."""
+    store = get_chat_store()
+    deleted = store.delete_chat(chat_id)
+    return {"status": "deleted" if deleted else "not_found"}
+
+
+@app.post("/api/chats/{chat_id}/messages")
+async def add_chat_message(chat_id: str, req: AddMessageRequest):
+    """Add a message to a chat."""
+    store = get_chat_store()
+    msg = ChatMessageRecord(
+        id=req.id,
+        chat_id=chat_id,
+        role=req.role,
+        content=req.content,
+        timestamp=req.timestamp,
+        duration_ms=req.duration_ms,
+        trace_steps=req.trace_steps,
+    )
+    store.add_message(msg)
+    return {"status": "ok"}
 
 
 @app.get("/api/config")
