@@ -24,7 +24,7 @@ Sentinel enables autonomous agents to break down complex tasks into dependency g
 | Memory | ChromaDB |
 | Frontend | React 19, TypeScript, Vite |
 | Testing | pytest, pytest-asyncio, Ruff |
-| Deployment | Docker, Docker Compose |
+| Deployment | pip, npm |
 
 ## Quick Start
 
@@ -61,12 +61,6 @@ sentinel-server
 ```
 
 This serves the REST API at `http://localhost:8000/api`, WebSocket at `ws://localhost:8000/ws`, and the React frontend at `http://localhost:8000`.
-
-### Run with Docker
-
-```bash
-docker-compose up --build
-```
 
 ## Project Structure
 
