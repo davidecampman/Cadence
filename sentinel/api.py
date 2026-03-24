@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 import uuid
 from pathlib import Path
@@ -353,6 +354,48 @@ async def remove_key(provider: str):
     return {"status": "deleted" if deleted else "not_found", "provider": provider}
 
 
+# --- OpenRouter embedding model discovery ---
+_openrouter_embed_cache: list[str] = []
+_openrouter_embed_cache_ts: float = 0.0
+_OPENROUTER_EMBED_TTL = 3600  # re-fetch every hour
+
+_OPENROUTER_EMBED_FALLBACK = [
+    "openrouter/openai/text-embedding-3-small",
+    "openrouter/openai/text-embedding-3-large",
+    "openrouter/openai/text-embedding-ada-002",
+    "openrouter/mistralai/mistral-embed-2312",
+    "openrouter/google/gemini-embedding-001",
+]
+
+logger = logging.getLogger(__name__)
+
+
+async def _fetch_openrouter_embedding_models() -> list[str]:
+    """Fetch available embedding models from OpenRouter's API, with caching."""
+    global _openrouter_embed_cache, _openrouter_embed_cache_ts
+
+    if _openrouter_embed_cache and (time.time() - _openrouter_embed_cache_ts) < _OPENROUTER_EMBED_TTL:
+        return _openrouter_embed_cache
+
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get("https://openrouter.ai/api/v1/embeddings/models")
+            resp.raise_for_status()
+            data = resp.json().get("data", resp.json() if isinstance(resp.json(), list) else [])
+            model_ids = [f"openrouter/{m['id']}" for m in data if "id" in m]
+            if model_ids:
+                _openrouter_embed_cache = model_ids
+                _openrouter_embed_cache_ts = time.time()
+                return model_ids
+    except Exception as exc:
+        logger.debug("Failed to fetch OpenRouter embedding models: %s", exc)
+
+    # Fall back to a hardcoded list if the API is unreachable
+    return _OPENROUTER_EMBED_FALLBACK
+
+
 @app.get("/api/models/{provider}")
 async def list_models(provider: str, tier: str | None = None):
     """Return available model names for a provider using litellm's model registry.
@@ -438,21 +481,11 @@ async def list_models(provider: str, tier: str | None = None):
             else:
                 models.add(key)
 
-    # OpenRouter supports embedding models via passthrough, but litellm's
-    # registry doesn't list them.  Add well-known ones so the UI can offer them.
+    # OpenRouter supports embedding models via a dedicated API, but litellm's
+    # registry doesn't list them.  Fetch dynamically and cache.
     if provider == "openrouter":
-        _OPENROUTER_EMBEDDING_MODELS = [
-            "openrouter/openai/text-embedding-3-small",
-            "openrouter/openai/text-embedding-3-large",
-            "openrouter/openai/text-embedding-ada-002",
-            "openrouter/google/text-embedding-004",
-            "openrouter/mistralai/mistral-embed",
-            "openrouter/cohere/embed-english-v3.0",
-            "openrouter/cohere/embed-multilingual-v3.0",
-            "openrouter/cohere/embed-english-light-v3.0",
-            "openrouter/cohere/embed-multilingual-light-v3.0",
-        ]
-        for candidate in _OPENROUTER_EMBEDDING_MODELS:
+        or_embed_models = await _fetch_openrouter_embedding_models()
+        for candidate in or_embed_models:
             is_embedding = any(kw in candidate.lower() for kw in _EMBEDDING_KEYWORDS)
             if tier == "embedding" and not is_embedding:
                 continue
