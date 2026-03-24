@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 import uuid
 from pathlib import Path
@@ -353,6 +354,71 @@ async def remove_key(provider: str):
     return {"status": "deleted" if deleted else "not_found", "provider": provider}
 
 
+# --- OpenRouter dynamic model discovery ---
+# OpenRouter exposes two public endpoints:
+#   /api/v1/models            – chat / completion models
+#   /api/v1/embeddings/models – embedding models
+# We query both and cache results so the UI always reflects what's actually
+# available, rather than relying on litellm's static registry.
+
+_openrouter_cache: dict[str, list[str]] = {}  # "chat" | "embedding" -> model ids
+_openrouter_cache_ts: float = 0.0
+_OPENROUTER_CACHE_TTL = 3600  # re-fetch every hour
+
+logger = logging.getLogger(__name__)
+
+
+async def _fetch_openrouter_models() -> dict[str, list[str]]:
+    """Fetch chat and embedding models from OpenRouter, with caching.
+
+    Returns a dict with keys ``"chat"`` and ``"embedding"``, each mapping to
+    a list of litellm-style model ids (``openrouter/<provider>/<model>``).
+    Falls back to ``None`` (caller should use litellm registry) on failure.
+    """
+    global _openrouter_cache, _openrouter_cache_ts
+
+    if _openrouter_cache and (time.time() - _openrouter_cache_ts) < _OPENROUTER_CACHE_TTL:
+        return _openrouter_cache
+
+    import httpx
+
+    result: dict[str, list[str]] = {"chat": [], "embedding": []}
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            chat_resp, embed_resp = await asyncio.gather(
+                client.get("https://openrouter.ai/api/v1/models"),
+                client.get("https://openrouter.ai/api/v1/embeddings/models"),
+                return_exceptions=True,
+            )
+
+            if isinstance(chat_resp, BaseException):
+                logger.debug("OpenRouter /models fetch failed: %s", chat_resp)
+            else:
+                chat_resp.raise_for_status()
+                body = chat_resp.json()
+                data = body.get("data", body if isinstance(body, list) else [])
+                result["chat"] = [f"openrouter/{m['id']}" for m in data if "id" in m]
+
+            if isinstance(embed_resp, BaseException):
+                logger.debug("OpenRouter /embeddings/models fetch failed: %s", embed_resp)
+            else:
+                embed_resp.raise_for_status()
+                body = embed_resp.json()
+                data = body.get("data", body if isinstance(body, list) else [])
+                result["embedding"] = [f"openrouter/{m['id']}" for m in data if "id" in m]
+
+        if result["chat"] or result["embedding"]:
+            _openrouter_cache = result
+            _openrouter_cache_ts = time.time()
+            return result
+    except Exception as exc:
+        logger.debug("Failed to fetch OpenRouter models: %s", exc)
+
+    # Return empty – caller will fall back to litellm registry
+    return result
+
+
 @app.get("/api/models/{provider}")
 async def list_models(provider: str, tier: str | None = None):
     """Return available model names for a provider using litellm's model registry.
@@ -384,6 +450,23 @@ async def list_models(provider: str, tier: str | None = None):
     filt = _PROVIDER_FILTERS.get(provider)
     if not filt:
         return {"provider": provider, "models": []}
+
+    # --- OpenRouter: use their live API for all tiers ---
+    if provider == "openrouter":
+        or_models = await _fetch_openrouter_models()
+        models: set[str] = set()
+        if tier == "embedding":
+            models.update(or_models.get("embedding", []))
+        elif tier in ("strong", "fast"):
+            models.update(or_models.get("chat", []))
+        else:
+            # No tier specified: show chat models (exclude embeddings)
+            models.update(or_models.get("chat", []))
+
+        # If the live API returned results, use them; otherwise fall through
+        # to the litellm registry below as a last resort.
+        if models:
+            return {"provider": provider, "models": sorted(models)}
 
     # --- Tier-based exclusion / inclusion patterns ---
     # Embedding tier: only show embedding models.
@@ -437,30 +520,6 @@ async def list_models(provider: str, tier: str | None = None):
                 models.add(f"bedrock/converse/{model_id}")
             else:
                 models.add(key)
-
-    # OpenRouter supports embedding models via passthrough, but litellm's
-    # registry doesn't list them.  Add well-known ones so the UI can offer them.
-    if provider == "openrouter":
-        _OPENROUTER_EMBEDDING_MODELS = [
-            "openrouter/openai/text-embedding-3-small",
-            "openrouter/openai/text-embedding-3-large",
-            "openrouter/openai/text-embedding-ada-002",
-            "openrouter/google/text-embedding-004",
-            "openrouter/mistralai/mistral-embed",
-            "openrouter/cohere/embed-english-v3.0",
-            "openrouter/cohere/embed-multilingual-v3.0",
-            "openrouter/cohere/embed-english-light-v3.0",
-            "openrouter/cohere/embed-multilingual-light-v3.0",
-        ]
-        for candidate in _OPENROUTER_EMBEDDING_MODELS:
-            is_embedding = any(kw in candidate.lower() for kw in _EMBEDDING_KEYWORDS)
-            if tier == "embedding" and not is_embedding:
-                continue
-            if tier in ("strong", "fast") and is_embedding:
-                continue
-            if tier is None and is_embedding:
-                continue
-            models.add(candidate)
 
     # For bedrock, also include models from our explicit mapping so users
     # always see the latest Claude models even if litellm's registry is outdated.
