@@ -11,3 +11,14 @@ build/
 # Frontend
 frontend/node_modules/
 frontend/dist/
+
+# Root npm (Tauri CLI)
+node_modules/
+package-lock.json
+
+# Tauri / Desktop
+src-tauri/target/
+src-tauri/python-runtime/
+src-tauri/icons/*.png
+src-tauri/icons/*.ico
+src-tauri/icons/*.icns

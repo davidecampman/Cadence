@@ -1,0 +1,18 @@
+{
+  "name": "sentinel-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "tauri:bundle-python": "bash scripts/bundle-python.sh",
+    "frontend:dev": "cd frontend && npm run dev",
+    "frontend:build": "cd frontend && npm run build",
+    "frontend:install": "cd frontend && npm ci"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

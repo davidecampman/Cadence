@@ -1,4 +1,10 @@
-const API_BASE = '/api';
+// In desktop mode (Tauri), the frontend is served from a file:// or tauri:// origin,
+// so API calls need the full backend URL. In web mode, we use relative paths.
+const IS_DESKTOP = Boolean(
+  (window as Record<string, unknown>).__TAURI_INTERNALS__
+);
+const BACKEND_HOST = IS_DESKTOP ? 'http://localhost:8000' : '';
+const API_BASE = `${BACKEND_HOST}/api`;
 
 export interface ChatResponse {
   response: string;
@@ -217,8 +223,10 @@ export type WsMessage =
   | { type: 'pong' };
 
 export function connectWebSocket(onMessage: (msg: WsMessage) => void): WebSocket {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+  const wsUrl = IS_DESKTOP
+    ? 'ws://localhost:8000/ws'
+    : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
+  const ws = new WebSocket(wsUrl);
 
   ws.onmessage = (event) => {
     try {

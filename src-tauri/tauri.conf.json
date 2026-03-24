@@ -1,0 +1,73 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicegui/tauri-v2/main/tauri.conf.schema.json",
+  "productName": "Sentinel",
+  "version": "0.1.0",
+  "identifier": "com.sentinel.desktop",
+  "build": {
+    "frontendDist": "../frontend/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "cd ../frontend && npm run dev",
+    "beforeBuildCommand": "cd ../frontend && npm run build"
+  },
+  "app": {
+    "title": "Sentinel",
+    "windows": [
+      {
+        "title": "Sentinel",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "trayIcon": {
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": true,
+      "tooltip": "Sentinel"
+    },
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' http://localhost:8000 ws://localhost:8000; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "python-runtime/**/*"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "signingIdentity": null
+    },
+    "windows": {
+      "certificateThumbprint": null,
+      "nsis": {
+        "installMode": "perMachine",
+        "displayLanguageSelector": false
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": []
+      }
+    }
+  },
+  "plugins": {
+    "shell": {
+      "open": true,
+      "sidecar": []
+    },
+    "opener": {
+      "open": true
+    }
+  }
+}
