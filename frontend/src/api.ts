@@ -90,6 +90,25 @@ export async function fetchSkills(): Promise<SkillInfo[]> {
   return res.json();
 }
 
+export async function uploadSkill(file: File): Promise<{ status: string; skill: SkillInfo }> {
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(`${API_BASE}/skills/upload`, { method: 'POST', body: form });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.error || `Skill upload failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function uninstallSkill(name: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/skills/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.error || `Skill uninstall failed: ${res.status}`);
+  }
+}
+
 export async function fetchTrace(limit = 50): Promise<TraceStep[]> {
   const res = await fetch(`${API_BASE}/trace?limit=${limit}`);
   if (!res.ok) throw new Error(`Trace fetch failed: ${res.status}`);

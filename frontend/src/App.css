@@ -652,6 +652,68 @@ body.light-mode .info-card:hover {
   border: 1px solid var(--border);
 }
 
+/* ═══════════════════════════════════════════════
+   SKILLS — upload & uninstall
+   ═══════════════════════════════════════════════ */
+.skills-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.skills-header h2 {
+  margin: 0;
+}
+
+.skill-message {
+  display: flex;
+  align-items: center;
+  padding: 8px 14px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.skill-message.success {
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  color: #10b981;
+}
+
+.skill-message.error {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #ef4444;
+}
+
+.skill-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.skill-card-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.skill-uninstall-btn {
+  flex-shrink: 0;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 4px 8px;
+  opacity: 0.4;
+  transition: opacity 0.15s, border-color 0.15s;
+}
+
+.skill-uninstall-btn:hover {
+  opacity: 1;
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
 .config-json {
   background: rgba(4, 10, 28, 0.7);
   border: 1px solid var(--border);

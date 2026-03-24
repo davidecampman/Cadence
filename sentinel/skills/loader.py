@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import re
+import shutil
+import zipfile
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -119,6 +122,118 @@ class SkillLoader:
             parts.append("")
 
         return "\n".join(parts)
+
+    def install_from_zip(self, data: bytes) -> SkillDefinition:
+        """Install a skill from a zip file containing a SKILL.md.
+
+        The zip must contain a SKILL.md at the root or inside a single
+        top-level directory. The skill is extracted into the first
+        configured skills directory.
+
+        Returns the installed SkillDefinition.
+        Raises ValueError on invalid zip or missing SKILL.md.
+        """
+        buf = BytesIO(data)
+        if not zipfile.is_zipfile(buf):
+            raise ValueError("Uploaded file is not a valid zip archive")
+
+        buf.seek(0)
+        with zipfile.ZipFile(buf, "r") as zf:
+            names = zf.namelist()
+
+            # Find the SKILL.md inside the zip
+            skill_md_path: str | None = None
+            for n in names:
+                if n.endswith("SKILL.md") and "__MACOSX" not in n:
+                    skill_md_path = n
+                    break
+
+            if not skill_md_path:
+                raise ValueError("Zip archive does not contain a SKILL.md file")
+
+            # Parse the skill to validate before extracting
+            skill_md_content = zf.read(skill_md_path).decode("utf-8", errors="replace")
+            # Determine the skill directory name from the zip structure
+            parts = skill_md_path.split("/")
+            if len(parts) > 1:
+                # SKILL.md is inside a subdirectory — use that as the skill folder name
+                top_dir = parts[0]
+            else:
+                # SKILL.md at root of zip — parse name from frontmatter
+                top_dir = None
+
+            # Write a temp file to parse it
+            import tempfile
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmp_skill_dir = Path(tmpdir) / "skill"
+                tmp_skill_dir.mkdir()
+                tmp_file = tmp_skill_dir / "SKILL.md"
+                tmp_file.write_text(skill_md_content)
+                skill = self._parse_skill_file(tmp_file)
+                if not skill:
+                    raise ValueError("Failed to parse SKILL.md — invalid format")
+
+            # Determine the install target directory
+            install_base = self._dirs[0]
+            install_base.mkdir(parents=True, exist_ok=True)
+
+            skill_folder = install_base / skill.name
+            # Remove existing version if present
+            if skill_folder.exists():
+                shutil.rmtree(skill_folder)
+            skill_folder.mkdir(parents=True, exist_ok=True)
+
+            # Extract files into the skill folder
+            for member in names:
+                if "__MACOSX" in member or member.endswith("/"):
+                    continue
+                # Strip the top-level directory prefix if present
+                if top_dir and member.startswith(top_dir + "/"):
+                    relative = member[len(top_dir) + 1:]
+                else:
+                    relative = member
+                if not relative:
+                    continue
+                dest = skill_folder / relative
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(zf.read(member))
+
+            # Re-parse the installed skill from its final location
+            installed_skill_file = skill_folder / "SKILL.md"
+            installed = self._parse_skill_file(installed_skill_file)
+            if installed:
+                self._skills[installed.name] = installed
+                return installed
+            raise ValueError("Skill installed but failed to re-parse")
+
+    def uninstall(self, skill_name: str) -> bool:
+        """Remove a skill by name.
+
+        Deletes the skill directory from disk and removes it from the
+        in-memory registry. Returns True if the skill was found and removed.
+        """
+        skill = self._skills.get(skill_name)
+        if not skill:
+            return False
+
+        # Remove from disk
+        if skill.file_path:
+            skill_file = Path(skill.file_path)
+            skill_dir = skill_file.parent
+            # Only remove the directory if it's inside one of the configured skill dirs
+            for base_dir in self._dirs:
+                try:
+                    skill_dir.relative_to(base_dir.resolve())
+                    if skill_dir.exists():
+                        shutil.rmtree(skill_dir)
+                    break
+                except ValueError:
+                    continue
+
+        # Remove from in-memory registry
+        self._skills.pop(skill_name, None)
+        return True
 
     @property
     def all_skills(self) -> dict[str, SkillDefinition]:
