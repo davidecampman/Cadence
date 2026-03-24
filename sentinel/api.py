@@ -96,6 +96,8 @@ class ChatResponse(BaseModel):
     session_id: str
     trace_steps: list[dict]
     duration_ms: float
+    context_turns: int = 0        # Current conversation turns in context
+    max_context_turns: int = 50   # Max turns before hard cap
 
 
 # --- Per-session conversation history ---
@@ -103,7 +105,9 @@ class ChatResponse(BaseModel):
 # messages carry prior context to the LLM.
 _session_history: dict[str, list[dict[str, str]]] = {}
 
-MAX_HISTORY_TURNS = 50  # keep last N user+assistant pairs per session
+# Per-session compressed summary of older conversation turns.
+# When compression fires, older turns are replaced by a single summary.
+_session_summaries: dict[str, str] = {}
 
 
 # --- REST endpoints ---
@@ -118,13 +122,83 @@ async def startup():
     agent_app.trace.log = _patched_log
 
 
+async def _compress_history(
+    agent_app: SentinelApp,
+    session_id: str,
+    history: list[dict[str, str]],
+    keep_recent: int = 10,
+) -> list[dict[str, str]]:
+    """Summarize older conversation turns into a condensed recap.
+
+    Keeps the most recent ``keep_recent`` turn-pairs verbatim and compresses
+    everything before that into a single summary message.
+    """
+    from sentinel.core.llm import chat_completion
+    from sentinel.core.types import Message, Role
+
+    # Split into old (to compress) and recent (to keep verbatim)
+    split_idx = len(history) - (keep_recent * 2)
+    if split_idx <= 0:
+        return history
+
+    old_turns = history[:split_idx]
+    recent_turns = history[split_idx:]
+
+    # Build the old conversation text
+    old_text_parts = []
+    for entry in old_turns:
+        role_label = "User" if entry["role"] == "user" else "Assistant"
+        old_text_parts.append(f"{role_label}: {entry['content']}")
+    old_text = "\n".join(old_text_parts)
+
+    # Prepend any existing summary so we don't lose earlier context
+    existing_summary = _session_summaries.get(session_id, "")
+    context_to_compress = ""
+    if existing_summary:
+        context_to_compress += f"[Previous summary]: {existing_summary}\n\n"
+    context_to_compress += old_text
+
+    compression_prompt = (
+        "Summarize the following conversation into a concise recap. "
+        "Preserve key facts, decisions, code/file references, and any "
+        "commitments made. Be thorough but compact.\n\n"
+        f"{context_to_compress}"
+    )
+
+    try:
+        summary, _, _ = await chat_completion(
+            model=agent_app.config.models.fast,
+            messages=[Message(role=Role.USER, content=compression_prompt)],
+            temperature=0.2,
+            max_tokens=1024,
+            bedrock_config=(
+                agent_app.config.models.bedrock
+                if agent_app.config.models.bedrock.enabled
+                else None
+            ),
+        )
+        _session_summaries[session_id] = summary.strip()
+    except Exception:
+        # If compression fails, fall back to hard truncation
+        _session_summaries[session_id] = existing_summary
+        return recent_turns
+
+    # Return summary as a system-level context entry + recent verbatim turns
+    compressed = [
+        {"role": "assistant", "content": f"[Conversation summary]: {_session_summaries[session_id]}"},
+    ]
+    compressed.extend(recent_turns)
+    return compressed
+
+
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     agent_app = get_app()
+    conv_config = agent_app.config.conversation
     session_id = req.session_id or str(uuid.uuid4())[:8]
 
     # Retrieve prior conversation history for this session
-    history = _session_history.get(session_id, [])
+    history = list(_session_history.get(session_id, []))
 
     # Track trace steps for this request
     start_idx = len(agent_app.trace.steps)
@@ -150,9 +224,17 @@ async def chat(req: ChatRequest):
     # Persist this exchange in session history
     history.append({"role": "user", "content": req.message})
     history.append({"role": "assistant", "content": response})
-    # Trim to keep only the last N turns (each turn = user + assistant = 2 entries)
-    if len(history) > MAX_HISTORY_TURNS * 2:
-        history = history[-(MAX_HISTORY_TURNS * 2):]
+
+    # Compress if enabled and threshold exceeded
+    turn_count = len(history) // 2
+    if conv_config.compression_enabled and turn_count > conv_config.compression_threshold:
+        history = await _compress_history(agent_app, session_id, history)
+
+    # Hard cap: trim to max_history_turns
+    max_entries = conv_config.max_history_turns * 2
+    if len(history) > max_entries:
+        history = history[-max_entries:]
+
     _session_history[session_id] = history
 
     duration_ms = (time.time() - start) * 1000
@@ -163,6 +245,8 @@ async def chat(req: ChatRequest):
         session_id=session_id,
         trace_steps=[s.model_dump() for s in new_steps],
         duration_ms=duration_ms,
+        context_turns=len(_session_history[session_id]) // 2,
+        max_context_turns=conv_config.max_history_turns,
     )
 
 

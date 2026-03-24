@@ -71,6 +71,13 @@ class SkillsConfig(BaseModel):
     auto_discover: bool = True
 
 
+class ConversationConfig(BaseModel):
+    """Settings for conversation context persistence and compression."""
+    max_history_turns: int = 50          # Max user+assistant pairs to keep
+    compression_enabled: bool = True     # Summarize old context when threshold hit
+    compression_threshold: int = 30      # Compress when turns exceed this count
+
+
 class LoggingConfig(BaseModel):
     level: str = "INFO"
     trace_file: str = "./data/traces.jsonl"
@@ -83,6 +90,7 @@ class Config(BaseModel):
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
+    conversation: ConversationConfig = Field(default_factory=ConversationConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 

@@ -103,7 +103,9 @@ function App() {
     const saved = localStorage.getItem('sentinel-disabled-tools');
     return saved ? new Set(JSON.parse(saved)) : new Set();
   });
-  const [configTab, setConfigTab] = useState<'providers' | 'budget' | 'agents' | 'memory' | 'execution'>('providers');
+  const [configTab, setConfigTab] = useState<'providers' | 'budget' | 'agents' | 'memory' | 'execution' | 'conversation'>('providers');
+  const [contextTurns, setContextTurns] = useState(0);
+  const [maxContextTurns, setMaxContextTurns] = useState(50);
   const [configDraft, setConfigDraft] = useState<{
     strong: string;
     fast: string;
@@ -128,6 +130,9 @@ function App() {
     decay_rate: number;
     max_results: number;
     similarity_threshold: number;
+    max_history_turns: number;
+    compression_enabled: boolean;
+    compression_threshold: number;
   } | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -248,7 +253,11 @@ function App() {
         decay_rate: config.memory.decay_rate,
         max_results: config.memory.max_results,
         similarity_threshold: config.memory.similarity_threshold,
+        max_history_turns: config.conversation?.max_history_turns ?? 50,
+        compression_enabled: config.conversation?.compression_enabled ?? true,
+        compression_threshold: config.conversation?.compression_threshold ?? 30,
       });
+      setMaxContextTurns(config.conversation?.max_history_turns ?? 50);
     }
   }, [config, configDraft]);
 
@@ -314,8 +323,14 @@ function App() {
           max_results: configDraft.max_results,
           similarity_threshold: configDraft.similarity_threshold,
         },
+        conversation: {
+          max_history_turns: configDraft.max_history_turns,
+          compression_enabled: configDraft.compression_enabled,
+          compression_threshold: configDraft.compression_threshold,
+        },
       });
       setConfig(newConfig);
+      setMaxContextTurns(configDraft.max_history_turns);
       setConfigSaved(true);
       setTimeout(() => setConfigSaved(false), 3000);
     } catch (err) {
@@ -460,6 +475,8 @@ function App() {
 
     try {
       const res: ChatResponse = await sendMessage(msg, currentSessionId);
+      setContextTurns(res.context_turns ?? 0);
+      if (res.max_context_turns) setMaxContextTurns(res.max_context_turns);
 
       const agentMsg: ChatMessage = {
         id: crypto.randomUUID(),
@@ -706,6 +723,19 @@ function App() {
             </div>
 
             <div className="chat-input-area">
+              {contextTurns > 0 && (
+                <div className="context-indicator" title={`${contextTurns} of ${maxContextTurns} conversation turns in context`}>
+                  <div className="context-bar">
+                    <div
+                      className={`context-fill${contextTurns / maxContextTurns > 0.8 ? ' warning' : ''}${contextTurns >= maxContextTurns ? ' full' : ''}`}
+                      style={{ width: `${Math.min(100, (contextTurns / maxContextTurns) * 100)}%` }}
+                    />
+                  </div>
+                  <span className="context-label">
+                    {Math.round((contextTurns / maxContextTurns) * 100)}%
+                  </span>
+                </div>
+              )}
               <div className="chat-input-wrapper">
                 <textarea
                   ref={inputRef}
@@ -815,6 +845,7 @@ function App() {
                 ['agents', 'Agents'],
                 ['memory', 'Memory'],
                 ['execution', 'Execution'],
+                ['conversation', 'Conversation'],
               ] as const).map(([key, label]) => (
                 <button
                   key={key}
@@ -1445,6 +1476,58 @@ function App() {
                   </>
                 )}
 
+                {configTab === 'conversation' && (
+                  <>
+                <div className="config-section">
+                  <h3>Conversation</h3>
+                  <p className="config-hint">
+                    Controls how much conversation history is sent to the LLM for context.
+                    When compression is enabled, older turns are automatically summarized
+                    to preserve context while saving tokens.
+                  </p>
+                  <div className="config-field">
+                    <label>
+                      Max History Turns
+                      <span className="field-hint">Maximum user+assistant pairs to retain</span>
+                    </label>
+                    <input
+                      type="number"
+                      min={5}
+                      max={200}
+                      value={configDraft.max_history_turns}
+                      onChange={(e) => setConfigDraft({ ...configDraft, max_history_turns: parseInt(e.target.value) || 50 })}
+                    />
+                  </div>
+                  <div className="config-field">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={configDraft.compression_enabled}
+                        onChange={(e) => setConfigDraft({ ...configDraft, compression_enabled: e.target.checked })}
+                      />
+                      {' '}Context Compression
+                      <span className="field-hint">Summarize older turns instead of dropping them</span>
+                    </label>
+                  </div>
+                  {configDraft.compression_enabled && (
+                    <div className="config-field">
+                      <label>
+                        Compression Threshold
+                        <span className="field-hint">Compress when conversation exceeds this many turns</span>
+                      </label>
+                      <input
+                        type="number"
+                        min={5}
+                        max={100}
+                        value={configDraft.compression_threshold}
+                        onChange={(e) => setConfigDraft({ ...configDraft, compression_threshold: parseInt(e.target.value) || 30 })}
+                      />
+                    </div>
+                  )}
+                </div>
+                  </>
+                )}
+
                 {/* Save Button */}
                 <div className="config-actions">
                   <button
@@ -1482,6 +1565,9 @@ function App() {
                           decay_rate: config.memory.decay_rate,
                           max_results: config.memory.max_results,
                           similarity_threshold: config.memory.similarity_threshold,
+                          max_history_turns: config.conversation?.max_history_turns ?? 50,
+                          compression_enabled: config.conversation?.compression_enabled ?? true,
+                          compression_threshold: config.conversation?.compression_threshold ?? 30,
                         });
                       }
                     }}

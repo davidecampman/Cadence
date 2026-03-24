@@ -65,6 +65,11 @@ execution:
     - "halt"
     - "poweroff"
 
+conversation:
+  max_history_turns: 50             # Max user+assistant pairs to retain
+  compression_enabled: true         # Summarize older context when threshold hit
+  compression_threshold: 30         # Compress when turns exceed this count
+
 skills:
   directories:
     - "./skills"                    # Local skills directory
