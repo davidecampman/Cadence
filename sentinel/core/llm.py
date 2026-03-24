@@ -151,12 +151,20 @@ def _is_bedrock_model(model: str) -> bool:
 # When bedrock is enabled and users specify a bare model name (e.g. "claude-sonnet-4-20250514"),
 # we need to convert it to the Bedrock-specific ID (e.g. "anthropic.claude-sonnet-4-20250514-v1:0").
 _BEDROCK_MODEL_MAP: dict[str, str] = {
+    # Claude 4.6 family
+    "claude-opus-4-6-20250610": "anthropic.claude-opus-4-6-20250610-v1:0",
+    "claude-sonnet-4-6-20250610": "anthropic.claude-sonnet-4-6-20250610-v1:0",
+    # Claude 4.5 family
+    "claude-sonnet-4-5-20250514": "anthropic.claude-sonnet-4-5-20250514-v1:0",
+    "claude-haiku-4-5-20251001": "anthropic.claude-haiku-4-5-20251001-v1:0",
+    # Claude 4 family
     "claude-sonnet-4-20250514": "anthropic.claude-sonnet-4-20250514-v1:0",
     "claude-opus-4-20250514": "anthropic.claude-opus-4-20250514-v1:0",
-    "claude-haiku-4-5-20251001": "anthropic.claude-haiku-4-5-20251001-v1:0",
+    # Claude 3.5 family
     "claude-3-5-sonnet-20241022": "anthropic.claude-3-5-sonnet-20241022-v2:0",
     "claude-3-5-haiku-20241022": "anthropic.claude-3-5-haiku-20241022-v1:0",
     "claude-3-5-sonnet-20240620": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+    # Claude 3 family
     "claude-3-opus-20240229": "anthropic.claude-3-opus-20240229-v1:0",
     "claude-3-sonnet-20240229": "anthropic.claude-3-sonnet-20240229-v1:0",
     "claude-3-haiku-20240307": "anthropic.claude-3-haiku-20240307-v1:0",
@@ -168,13 +176,16 @@ def _to_bedrock_model(model: str) -> str:
 
     If the model is already bedrock-prefixed, return as-is.
     If the model name is in our mapping, convert it using the converse route.
-    Otherwise, prepend "bedrock/converse/" so LiteLLM uses the recommended
-    Bedrock converse API path.
+    Otherwise, infer the Bedrock model ID: for Claude models, prepend
+    "anthropic." and append "-v1:0" to form a valid Bedrock ARN.
     """
     if _is_bedrock_model(model):
         return model
     if model in _BEDROCK_MODEL_MAP:
         return f"bedrock/converse/{_BEDROCK_MODEL_MAP[model]}"
+    # Infer Bedrock ID for Claude models not yet in the explicit map
+    if model.startswith("claude-"):
+        return f"bedrock/converse/anthropic.{model}-v1:0"
     return f"bedrock/converse/{model}"
 
 

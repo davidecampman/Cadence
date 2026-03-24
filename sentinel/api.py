@@ -438,6 +438,21 @@ async def list_models(provider: str, tier: str | None = None):
             else:
                 models.add(key)
 
+    # For bedrock, also include models from our explicit mapping so users
+    # always see the latest Claude models even if litellm's registry is outdated.
+    if provider == "bedrock":
+        from sentinel.core.llm import _BEDROCK_MODEL_MAP
+        for _std_name, _br_id in _BEDROCK_MODEL_MAP.items():
+            candidate = f"bedrock/converse/{_br_id}"
+            is_embedding = any(kw in _br_id.lower() for kw in _EMBEDDING_KEYWORDS)
+            if tier == "embedding" and not is_embedding:
+                continue
+            if tier in ("strong", "fast") and is_embedding:
+                continue
+            if tier is None and is_embedding:
+                continue
+            models.add(candidate)
+
     return {"provider": provider, "models": sorted(models)}
 
 
