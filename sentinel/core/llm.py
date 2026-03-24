@@ -171,21 +171,41 @@ _BEDROCK_MODEL_MAP: dict[str, str] = {
 }
 
 
-def _to_bedrock_model(model: str) -> str:
+def _region_to_inference_prefix(region: str) -> str:
+    """Map an AWS region to the Bedrock cross-region inference profile prefix.
+
+    Newer Claude models (3.5+, 4.x) don't support on-demand throughput with
+    bare model IDs and require a cross-region inference profile. The profile
+    ID is formed by prepending a geographic prefix (e.g. ``us.``, ``eu.``,
+    ``ap.``) to the model ID.
+    """
+    if region.startswith("us-"):
+        return "us"
+    if region.startswith("eu-") or region.startswith("me-"):
+        return "eu"
+    if region.startswith("ap-"):
+        return "ap"
+    # Default to "us" for unknown regions
+    return "us"
+
+
+def _to_bedrock_model(model: str, region: str = "us-east-1") -> str:
     """Convert a standard model name to a Bedrock-prefixed model ID.
 
     If the model is already bedrock-prefixed, return as-is.
-    If the model name is in our mapping, convert it using the converse route.
+    If the model name is in our mapping, convert it using the converse route
+    with a cross-region inference profile prefix derived from *region*.
     Otherwise, infer the Bedrock model ID: for Claude models, prepend
-    "anthropic." and append "-v1:0" to form a valid Bedrock ARN.
+    "anthropic." and append "-v1:0" to form a valid Bedrock ID.
     """
     if _is_bedrock_model(model):
         return model
+    prefix = _region_to_inference_prefix(region)
     if model in _BEDROCK_MODEL_MAP:
-        return f"bedrock/converse/{_BEDROCK_MODEL_MAP[model]}"
+        return f"bedrock/converse/{prefix}.{_BEDROCK_MODEL_MAP[model]}"
     # Infer Bedrock ID for Claude models not yet in the explicit map
     if model.startswith("claude-"):
-        return f"bedrock/converse/anthropic.{model}-v1:0"
+        return f"bedrock/converse/{prefix}.anthropic.{model}-v1:0"
     return f"bedrock/converse/{model}"
 
 
@@ -214,7 +234,7 @@ async def chat_completion(
     # Apply Bedrock env vars if a config is provided
     bedrock_extra: dict[str, Any] = {}
     if bedrock_config and bedrock_config.enabled:
-        model = _to_bedrock_model(model)
+        model = _to_bedrock_model(model, region=bedrock_config.region)
         bedrock_extra = _configure_bedrock_env(bedrock_config)
     elif _is_bedrock_model(model):
         # Model is explicitly bedrock-prefixed; configure from env vars / keystore

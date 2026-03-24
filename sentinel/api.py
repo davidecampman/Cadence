@@ -441,9 +441,11 @@ async def list_models(provider: str, tier: str | None = None):
     # For bedrock, also include models from our explicit mapping so users
     # always see the latest Claude models even if litellm's registry is outdated.
     if provider == "bedrock":
-        from sentinel.core.llm import _BEDROCK_MODEL_MAP
+        from sentinel.core.llm import _BEDROCK_MODEL_MAP, _region_to_inference_prefix
+        _bedrock_region = get_app().config.models.bedrock.region
+        _inf_prefix = _region_to_inference_prefix(_bedrock_region)
         for _std_name, _br_id in _BEDROCK_MODEL_MAP.items():
-            candidate = f"bedrock/converse/{_br_id}"
+            candidate = f"bedrock/converse/{_inf_prefix}.{_br_id}"
             is_embedding = any(kw in _br_id.lower() for kw in _EMBEDDING_KEYWORDS)
             if tier == "embedding" and not is_embedding:
                 continue

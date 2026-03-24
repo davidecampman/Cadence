@@ -16,7 +16,7 @@ from sentinel.core.types import (
     TraceStep,
 )
 from sentinel.core.config import Config, BedrockConfig, load_config
-from sentinel.core.llm import supports_native_tools, _is_bedrock_model
+from sentinel.core.llm import supports_native_tools, _is_bedrock_model, _to_bedrock_model, _region_to_inference_prefix
 from sentinel.core.trace import TraceLogger
 from sentinel.tools.base import Tool, ToolRegistry
 from sentinel.skills.loader import SkillLoader, SkillDefinition
@@ -277,6 +277,44 @@ def test_bedrock_native_tool_support():
     # Non-bedrock models should still work
     assert supports_native_tools("claude-sonnet-4-20250514")
     assert supports_native_tools("gpt-4o")
+
+
+def test_region_to_inference_prefix():
+    assert _region_to_inference_prefix("us-east-1") == "us"
+    assert _region_to_inference_prefix("us-west-2") == "us"
+    assert _region_to_inference_prefix("eu-west-1") == "eu"
+    assert _region_to_inference_prefix("eu-central-1") == "eu"
+    assert _region_to_inference_prefix("ap-northeast-1") == "ap"
+    assert _region_to_inference_prefix("ap-southeast-2") == "ap"
+    assert _region_to_inference_prefix("me-south-1") == "eu"
+    # Unknown region defaults to "us"
+    assert _region_to_inference_prefix("unknown-region") == "us"
+
+
+def test_to_bedrock_model_uses_inference_profile():
+    # Known model in map should get inference profile prefix
+    result = _to_bedrock_model("claude-haiku-4-5-20251001", region="us-east-1")
+    assert result == "bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+    # EU region should use eu. prefix
+    result = _to_bedrock_model("claude-sonnet-4-5-20250514", region="eu-west-1")
+    assert result == "bedrock/converse/eu.anthropic.claude-sonnet-4-5-20250514-v1:0"
+
+    # AP region
+    result = _to_bedrock_model("claude-3-opus-20240229", region="ap-northeast-1")
+    assert result == "bedrock/converse/ap.anthropic.claude-3-opus-20240229-v1:0"
+
+    # Already bedrock-prefixed model should be returned as-is
+    result = _to_bedrock_model("bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0")
+    assert result == "bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+    # Unknown claude model not in map should still get inference profile prefix
+    result = _to_bedrock_model("claude-future-model-20260101", region="us-east-1")
+    assert result == "bedrock/converse/us.anthropic.claude-future-model-20260101-v1:0"
+
+    # Non-claude model should not get inference profile prefix
+    result = _to_bedrock_model("some-other-model", region="us-east-1")
+    assert result == "bedrock/converse/some-other-model"
 
 
 # --- Skill Install / Uninstall ---
