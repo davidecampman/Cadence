@@ -130,7 +130,7 @@ function App() {
     const saved = loadChatsFromLocalStorage();
     return saved.length > 0 ? saved[0].id : null;
   });
-  const [backendReady, setBackendReady] = useState(false);
+  const [_backendReady, setBackendReady] = useState(false);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [traceSteps, setTraceSteps] = useState<TraceStep[]>([]);
