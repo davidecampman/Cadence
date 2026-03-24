@@ -1,5 +1,5 @@
 [project]
-name = "agent-one"
+name = "sentinel"
 version = "0.1.0"
 description = "A model-agnostic multi-agent framework with structured planning, tiered memory, and parallel task execution."
 requires-python = ">=3.11"
@@ -24,11 +24,11 @@ dev = [
 ]
 
 [project.scripts]
-agent-one = "agent_one.cli:main"
-agent-one-server = "agent_one.server:main"
+sentinel = "sentinel.cli:main"
+sentinel-server = "sentinel.server:main"
 
 [tool.setuptools.packages.find]
-include = ["agent_one*"]
+include = ["sentinel*"]
 
 [tool.ruff]
 line-length = 100

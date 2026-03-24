@@ -36,7 +36,7 @@ interface ChatMessage {
 
 function App() {
   const [lightMode, setLightMode] = useState(() => {
-    const saved = localStorage.getItem('agent-one-theme');
+    const saved = localStorage.getItem('sentinel-theme');
     return saved === 'light';
   });
   const [view, setView] = useState<View>('chat');
@@ -82,7 +82,7 @@ function App() {
   // Sync theme class on body
   useEffect(() => {
     document.body.classList.toggle('light-mode', lightMode);
-    localStorage.setItem('agent-one-theme', lightMode ? 'light' : 'dark');
+    localStorage.setItem('sentinel-theme', lightMode ? 'light' : 'dark');
   }, [lightMode]);
 
   // Check health on mount
@@ -308,7 +308,7 @@ function App() {
       {/* Sidebar */}
       <nav className="sidebar">
         <div className="sidebar-header">
-          <h1>Agent One</h1>
+          <h1>Sentinel</h1>
           <div className="version">v0.1.0 — Multi-Agent Framework</div>
         </div>
 
@@ -383,7 +383,7 @@ function App() {
               {messages.length === 0 && !loading ? (
                 <div className="chat-welcome">
                   <div className="logo">&#x1F916;</div>
-                  <h2>Agent One</h2>
+                  <h2>Sentinel</h2>
                   <p>
                     A model-agnostic multi-agent framework with structured planning,
                     tiered memory, and parallel task execution.
@@ -409,7 +409,7 @@ function App() {
                           {msg.role === 'user' ? 'U' : 'A'}
                         </div>
                         <span className="message-sender">
-                          {msg.role === 'user' ? 'You' : 'Agent One'}
+                          {msg.role === 'user' ? 'You' : 'Sentinel'}
                         </span>
                         <span className="message-time">{formatTime(msg.timestamp)}</span>
                       </div>
@@ -447,7 +447,7 @@ function App() {
                     <div className="typing-indicator">
                       <div className="message-header">
                         <div className="message-avatar agent">A</div>
-                        <span className="message-sender">Agent One</span>
+                        <span className="message-sender">Sentinel</span>
                       </div>
                       <div className="typing-dots">
                         <span />
@@ -466,7 +466,7 @@ function App() {
                 <textarea
                   ref={inputRef}
                   className="chat-input"
-                  placeholder="Ask Agent One anything..."
+                  placeholder="Ask Sentinel anything..."
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
@@ -526,7 +526,7 @@ function App() {
           <div className="info-panel">
             <h2>LLM Providers</h2>
             <p className="config-subtitle">
-              Configure which models are used for each task tier. Agent One uses LiteLLM under the hood,
+              Configure which models are used for each task tier. Sentinel uses LiteLLM under the hood,
               so any supported provider works (OpenAI, Anthropic, Google, Mistral, etc.).
             </p>
 
@@ -745,7 +745,7 @@ function App() {
                 <div className="config-section">
                   <h3>Model Tiers</h3>
                   <p className="config-hint">
-                    Agent One routes tasks to different models based on complexity.
+                    Sentinel routes tasks to different models based on complexity.
                   </p>
                   <div className="config-field">
                     <label>

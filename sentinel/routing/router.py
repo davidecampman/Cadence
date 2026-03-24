@@ -5,9 +5,9 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from agent_one.core.config import Config, get_config
-from agent_one.core.llm import chat_completion
-from agent_one.core.types import Message, Role
+from sentinel.core.config import Config, get_config
+from sentinel.core.llm import chat_completion
+from sentinel.core.types import Message, Role
 
 
 class ModelStats:

@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
-from agent_one.core.config import Config, load_config
-from agent_one.core.trace import TraceLogger
-from agent_one.agents.orchestrator import Orchestrator
-from agent_one.memory.store import MemoryStore
-from agent_one.skills.loader import SkillLoader
-from agent_one.routing.router import SmartRouter
-from agent_one.tools.base import ToolRegistry
-from agent_one.tools.code_execution import CodeExecutionTool, ShellTool
-from agent_one.tools.delegate import DelegateTool
-from agent_one.tools.file_ops import ListFilesTool, ReadFileTool, SearchFilesTool, WriteFileTool
-from agent_one.tools.memory_tools import MemoryDeleteTool, MemoryQueryTool, MemorySaveTool
-from agent_one.tools.web import WebFetchTool
+from sentinel.core.config import Config, load_config
+from sentinel.core.trace import TraceLogger
+from sentinel.agents.orchestrator import Orchestrator
+from sentinel.memory.store import MemoryStore
+from sentinel.skills.loader import SkillLoader
+from sentinel.routing.router import SmartRouter
+from sentinel.tools.base import ToolRegistry
+from sentinel.tools.code_execution import CodeExecutionTool, ShellTool
+from sentinel.tools.delegate import DelegateTool
+from sentinel.tools.file_ops import ListFilesTool, ReadFileTool, SearchFilesTool, WriteFileTool
+from sentinel.tools.memory_tools import MemoryDeleteTool, MemoryQueryTool, MemorySaveTool
+from sentinel.tools.web import WebFetchTool
 
 
-class AgentOneApp:
+class SentinelApp:
     """Main application — bootstraps all components and provides the run interface."""
 
     def __init__(self, config_path: str | None = None):

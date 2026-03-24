@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from agent_one.core.types import (
+from sentinel.core.types import (
     AgentRole,
     Message,
     PermissionTier,
@@ -15,13 +15,13 @@ from agent_one.core.types import (
     ToolDefinition,
     TraceStep,
 )
-from agent_one.core.config import Config, BedrockConfig, load_config
-from agent_one.core.llm import supports_native_tools, _is_bedrock_model
-from agent_one.core.trace import TraceLogger
-from agent_one.tools.base import Tool, ToolRegistry
-from agent_one.skills.loader import SkillLoader, SkillDefinition
-from agent_one.routing.router import ModelStats, SmartRouter
-from agent_one.tools.code_execution import (
+from sentinel.core.config import Config, BedrockConfig, load_config
+from sentinel.core.llm import supports_native_tools, _is_bedrock_model
+from sentinel.core.trace import TraceLogger
+from sentinel.tools.base import Tool, ToolRegistry
+from sentinel.skills.loader import SkillLoader, SkillDefinition
+from sentinel.routing.router import ModelStats, SmartRouter
+from sentinel.tools.code_execution import (
     _build_resource_limits,
     _check_blocked,
     _shell_quote,

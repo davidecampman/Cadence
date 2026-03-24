@@ -1,4 +1,4 @@
-"""FastAPI backend — exposes Agent One as a REST + WebSocket API."""
+"""FastAPI backend — exposes Sentinel as a REST + WebSocket API."""
 
 from __future__ import annotations
 
@@ -14,9 +14,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from agent_one.app import AgentOneApp
-from agent_one.core.config import update_config as _update_config
-from agent_one.core.keystore import (
+from sentinel.app import SentinelApp
+from sentinel.core.config import update_config as _update_config
+from sentinel.core.keystore import (
     save_key as _save_key,
     delete_key as _delete_key,
     delete_bedrock_keys as _delete_bedrock_keys,
@@ -26,9 +26,9 @@ from agent_one.core.keystore import (
     PROVIDER_ENV_VARS,
     BEDROCK_KEYS,
 )
-from agent_one.core.types import TraceStep
+from sentinel.core.types import TraceStep
 
-app = FastAPI(title="Agent One", version="0.1.0")
+app = FastAPI(title="Sentinel", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,13 +38,13 @@ app.add_middleware(
 )
 
 # --- Global app instance ---
-_agent_app: AgentOneApp | None = None
+_agent_app: SentinelApp | None = None
 
 
-def get_app() -> AgentOneApp:
+def get_app() -> SentinelApp:
     global _agent_app
     if _agent_app is None:
-        _agent_app = AgentOneApp()
+        _agent_app = SentinelApp()
         _agent_app.discover_skills()
         # Disable console printing for API mode
         _agent_app.trace._console = False
@@ -164,7 +164,7 @@ async def put_config(req: ConfigUpdateRequest):
     agent_app.config = new_config
     agent_app.orchestrator.config = new_config
     agent_app.router = __import__(
-        "agent_one.routing.router", fromlist=["SmartRouter"]
+        "sentinel.routing.router", fromlist=["SmartRouter"]
     ).SmartRouter(new_config)
     return new_config.model_dump()
 

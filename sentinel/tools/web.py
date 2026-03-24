@@ -7,8 +7,8 @@ import urllib.request
 import urllib.error
 from html.parser import HTMLParser
 
-from agent_one.core.types import PermissionTier
-from agent_one.tools.base import Tool
+from sentinel.core.types import PermissionTier
+from sentinel.tools.base import Tool
 
 
 class _TextExtractor(HTMLParser):
@@ -58,7 +58,7 @@ class WebFetchTool(Tool):
     permission_tier = PermissionTier.PRIVILEGED
 
     async def execute(self, url: str, max_chars: int = 20000) -> str:
-        req = urllib.request.Request(url, headers={"User-Agent": "AgentOne/0.1"})
+        req = urllib.request.Request(url, headers={"User-Agent": "Sentinel/0.1"})
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 content_type = resp.headers.get("Content-Type", "")

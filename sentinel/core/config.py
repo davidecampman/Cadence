@@ -88,8 +88,8 @@ class Config(BaseModel):
 
 
 def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
-    """Override config values with AGENT_ONE_<SECTION>_<KEY> env vars."""
-    prefix = "AGENT_ONE_"
+    """Override config values with SENTINEL_<SECTION>_<KEY> env vars."""
+    prefix = "SENTINEL_"
     for key, value in os.environ.items():
         if not key.startswith(prefix):
             continue

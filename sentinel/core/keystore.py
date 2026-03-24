@@ -16,7 +16,7 @@ from pathlib import Path
 
 from cryptography.fernet import Fernet
 
-_DATA_DIR = Path(os.environ.get("AGENT_ONE_DATA_DIR", "./data"))
+_DATA_DIR = Path(os.environ.get("SENTINEL_DATA_DIR", "./data"))
 _MASTER_KEY_PATH = _DATA_DIR / ".keystore_key"
 _KEYS_PATH = _DATA_DIR / "api_keys.enc"
 

@@ -5,18 +5,18 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from agent_one.core.agent import Agent
-from agent_one.core.config import Config, get_config
-from agent_one.core.llm import chat_completion
-from agent_one.core.trace import TraceLogger
-from agent_one.core.types import (
+from sentinel.core.agent import Agent
+from sentinel.core.config import Config, get_config
+from sentinel.core.llm import chat_completion
+from sentinel.core.trace import TraceLogger
+from sentinel.core.types import (
     AgentRole,
     Message,
     Role,
     Task,
     TaskStatus,
 )
-from agent_one.tools.base import ToolRegistry
+from sentinel.tools.base import ToolRegistry
 
 
 # --- Predefined specialist roles ---

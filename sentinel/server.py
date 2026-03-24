@@ -1,4 +1,4 @@
-"""Server entry point — run with `agent-one-server` or `python -m agent_one.server`."""
+"""Server entry point — run with `sentinel-server` or `python -m sentinel.server`."""
 
 from __future__ import annotations
 
@@ -19,10 +19,10 @@ def main():
         if arg in ("--port", "-p") and i + 1 < len(args):
             port = int(args[i + 1])
 
-    print(f"\n  Agent One API server starting on http://{host}:{port}")
+    print(f"\n  Sentinel API server starting on http://{host}:{port}")
     print(f"  Frontend: http://localhost:{port}\n")
 
-    uvicorn.run("agent_one.api:app", host=host, port=port, reload=False)
+    uvicorn.run("sentinel.api:app", host=host, port=port, reload=False)
 
 
 if __name__ == "__main__":

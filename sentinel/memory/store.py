@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from agent_one.core.config import get_config
+from sentinel.core.config import get_config
 
 
 class MemoryEntry(BaseModel):

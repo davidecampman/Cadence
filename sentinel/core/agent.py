@@ -5,10 +5,10 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from agent_one.core.config import Config, get_config
-from agent_one.core.llm import chat_completion
-from agent_one.core.trace import TraceLogger
-from agent_one.core.types import (
+from sentinel.core.config import Config, get_config
+from sentinel.core.llm import chat_completion
+from sentinel.core.trace import TraceLogger
+from sentinel.core.types import (
     AgentRole,
     Message,
     PermissionTier,
@@ -17,7 +17,7 @@ from agent_one.core.types import (
     TaskStatus,
     ToolCall,
 )
-from agent_one.tools.base import Tool, ToolRegistry
+from sentinel.tools.base import Tool, ToolRegistry
 
 
 class Agent:

@@ -1,16 +1,16 @@
-"""CLI entry point — interactive REPL for Agent One."""
+"""CLI entry point — interactive REPL for Sentinel."""
 
 from __future__ import annotations
 
 import asyncio
 import sys
 
-from agent_one.app import AgentOneApp
+from sentinel.app import SentinelApp
 
 
 BANNER = """
 ╔═══════════════════════════════════════════╗
-║           Agent One v0.1.0                ║
+║           Sentinel v0.1.0                ║
 ║   Model-agnostic multi-agent framework    ║
 ╚═══════════════════════════════════════════╝
 
@@ -24,7 +24,7 @@ Type your request, or:
 
 
 async def async_main(config_path: str | None = None):
-    app = AgentOneApp(config_path)
+    app = SentinelApp(config_path)
 
     # Discover skills
     n_skills = app.discover_skills()
