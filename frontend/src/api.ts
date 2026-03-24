@@ -221,6 +221,16 @@ export async function fetchModels(provider: string, tier?: string): Promise<Mode
   return res.json();
 }
 
+// --- File access ---
+
+export function fileDownloadUrl(path: string): string {
+  return `${API_BASE}/files/download?path=${encodeURIComponent(path)}`;
+}
+
+export async function revealFile(path: string): Promise<void> {
+  await fetch(`${API_BASE}/files/reveal?path=${encodeURIComponent(path)}`);
+}
+
 export type WsMessage =
   | { type: 'trace'; data: TraceStep }
   | { type: 'pong' };

@@ -468,6 +468,65 @@ body.light-mode .message-body pre {
 }
 
 /* ═══════════════════════════════════════════════
+   FILE DOWNLOAD / REVEAL BUTTONS
+   ═══════════════════════════════════════════════ */
+.file-link-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 4px 0;
+  padding: 6px 10px;
+  background: rgba(45, 212, 191, 0.08);
+  border: 1px solid rgba(45, 212, 191, 0.25);
+  border-radius: var(--radius-sm);
+}
+
+body.light-mode .file-link-group {
+  background: rgba(45, 212, 191, 0.10);
+  border-color: rgba(45, 212, 191, 0.30);
+}
+
+.file-download-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: rgba(45, 212, 191, 0.15);
+  color: var(--accent);
+  border: 1px solid rgba(45, 212, 191, 0.30);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.file-download-btn:hover {
+  background: rgba(45, 212, 191, 0.25);
+  border-color: var(--accent);
+}
+
+.file-reveal-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: rgba(45, 212, 191, 0.10);
+  border: 1px solid rgba(45, 212, 191, 0.20);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.file-reveal-btn:hover {
+  background: rgba(45, 212, 191, 0.25);
+  border-color: var(--accent);
+}
+
+/* ═══════════════════════════════════════════════
    TYPING INDICATOR
    ═══════════════════════════════════════════════ */
 .typing-indicator {

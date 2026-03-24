@@ -9,7 +9,10 @@ import time
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, UploadFile, WebSocket, WebSocketDisconnect
+import platform
+import subprocess
+
+from fastapi import FastAPI, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -642,6 +645,44 @@ async def list_models(provider: str, tier: str | None = None):
             models.add(candidate)
 
     return {"provider": provider, "models": sorted(models)}
+
+
+# --- Local file access endpoints ---
+
+@app.get("/api/files/download")
+async def download_file(path: str = Query(..., description="Absolute path to the file")):
+    """Serve a local file as a browser download."""
+    p = Path(path).expanduser().resolve()
+    if not p.exists():
+        return {"error": f"File not found: {path}"}, 404
+    if not p.is_file():
+        return {"error": f"Not a file: {path}"}, 400
+    return FileResponse(
+        path=str(p),
+        filename=p.name,
+        media_type="application/octet-stream",
+    )
+
+
+@app.get("/api/files/reveal")
+async def reveal_file(path: str = Query(..., description="Path to reveal in file manager")):
+    """Open the OS file manager to the directory containing the given file."""
+    p = Path(path).expanduser().resolve()
+    target = p.parent if p.is_file() else p
+    if not target.exists():
+        return {"error": f"Directory not found: {target}"}
+
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            subprocess.Popen(["open", str(target)])
+        elif system == "Windows":
+            subprocess.Popen(["explorer", str(target)])
+        else:
+            subprocess.Popen(["xdg-open", str(target)])
+        return {"status": "opened", "path": str(target)}
+    except FileNotFoundError:
+        return {"error": f"No file manager found for {system}"}
 
 
 @app.get("/api/health")

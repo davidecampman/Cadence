@@ -14,6 +14,8 @@ import {
   fetchModels,
   uploadSkill,
   uninstallSkill,
+  fileDownloadUrl,
+  revealFile,
   type AppConfig,
   type ChatResponse,
   type TraceStep,
@@ -62,6 +64,53 @@ function chatTitle(messages: ChatMessage[]): string {
   if (!first) return 'New Chat';
   const text = first.content.trim();
   return text.length > 40 ? text.slice(0, 40) + '...' : text;
+}
+
+/** Render message content, replacing [[FILE:/path]] markers with download/reveal buttons. */
+function renderMessageContent(content: string) {
+  const FILE_RE = /\[\[FILE:(.*?)\]\]/g;
+  const parts: (string | { path: string })[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = FILE_RE.exec(content)) !== null) {
+    if (m.index > last) parts.push(content.slice(last, m.index));
+    parts.push({ path: m[1] });
+    last = m.index + m[0].length;
+  }
+  if (last < content.length) parts.push(content.slice(last));
+
+  // If no file markers found, also scan for absolute paths as a fallback
+  if (parts.length === 1 && typeof parts[0] === 'string') {
+    return <>{content}</>;
+  }
+
+  return (
+    <>
+      {parts.map((part, i) => {
+        if (typeof part === 'string') return <span key={i}>{part}</span>;
+        const fileName = part.path.split('/').pop() || part.path;
+        return (
+          <span key={i} className="file-link-group">
+            <a
+              href={fileDownloadUrl(part.path)}
+              download={fileName}
+              className="file-download-btn"
+              title={`Download ${part.path}`}
+            >
+              ⬇ {fileName}
+            </a>
+            <button
+              className="file-reveal-btn"
+              title={`Open folder containing ${fileName}`}
+              onClick={() => revealFile(part.path)}
+            >
+              📂
+            </button>
+          </span>
+        );
+      })}
+    </>
+  );
 }
 
 function App() {
@@ -666,7 +715,7 @@ function App() {
                         </span>
                         <span className="message-time">{formatTime(msg.timestamp)}</span>
                       </div>
-                      <div className={`message-body ${msg.role}`}>{msg.content}</div>
+                      <div className={`message-body ${msg.role}`}>{renderMessageContent(msg.content)}</div>
                       {msg.duration_ms && (
                         <div className="message-duration">
                           Completed in {(msg.duration_ms / 1000).toFixed(1)}s

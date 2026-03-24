@@ -60,7 +60,11 @@ class WriteFileTool(Tool):
         p = Path(path).expanduser()
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content)
-        return f"Wrote {len(content)} bytes to {path}"
+        abs_path = str(p.resolve())
+        return (
+            f"Wrote {len(content)} bytes to {path}\n"
+            f"[[FILE:{abs_path}]]"
+        )
 
 
 class ListFilesTool(Tool):
