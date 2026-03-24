@@ -27,6 +27,13 @@ if [ -n "$(git diff HEAD@{1} --name-only -- pyproject.toml 2>/dev/null)" ]; then
     pip install -e "$REPO_ROOT" --quiet
 fi
 
+# Kill any existing process on port 8000 before starting
+if lsof -ti :8000 >/dev/null 2>&1; then
+    echo ">> Port 8000 is in use — killing existing process..."
+    lsof -ti :8000 | xargs kill
+    sleep 1
+fi
+
 # Start the server
 echo ">> Starting Sentinel server..."
 exec python -m sentinel.server "$@"
