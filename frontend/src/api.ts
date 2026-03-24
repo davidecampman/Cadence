@@ -221,6 +221,85 @@ export async function fetchModels(provider: string, tier?: string): Promise<Mode
   return res.json();
 }
 
+// --- Chat persistence ---
+
+export interface ChatMessageRecord {
+  id: string;
+  chat_id: string;
+  role: string;
+  content: string;
+  timestamp: number;
+  duration_ms?: number | null;
+  trace_steps?: Record<string, unknown>[] | null;
+}
+
+export interface ChatRecord {
+  id: string;
+  title: string;
+  session_id?: string | null;
+  created_at: number;
+  updated_at: number;
+  messages?: ChatMessageRecord[];
+}
+
+export async function fetchChats(): Promise<ChatRecord[]> {
+  const res = await fetch(`${API_BASE}/chats`);
+  if (!res.ok) throw new Error(`Chats fetch failed: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchChat(chatId: string): Promise<ChatRecord> {
+  const res = await fetch(`${API_BASE}/chats/${encodeURIComponent(chatId)}`);
+  if (!res.ok) throw new Error(`Chat fetch failed: ${res.status}`);
+  return res.json();
+}
+
+export async function createChat(
+  id?: string,
+  title = 'New Chat',
+  createdAt?: number,
+): Promise<ChatRecord> {
+  const res = await fetch(`${API_BASE}/chats`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, title, created_at: createdAt }),
+  });
+  if (!res.ok) throw new Error(`Chat create failed: ${res.status}`);
+  return res.json();
+}
+
+export async function updateChat(
+  chatId: string,
+  updates: { title?: string; session_id?: string },
+): Promise<ChatRecord> {
+  const res = await fetch(`${API_BASE}/chats/${encodeURIComponent(chatId)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates),
+  });
+  if (!res.ok) throw new Error(`Chat update failed: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteChat(chatId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/chats/${encodeURIComponent(chatId)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error(`Chat delete failed: ${res.status}`);
+}
+
+export async function addChatMessage(
+  chatId: string,
+  msg: { id: string; role: string; content: string; timestamp: number; duration_ms?: number; trace_steps?: Record<string, unknown>[] },
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/chats/${encodeURIComponent(chatId)}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(msg),
+  });
+  if (!res.ok) throw new Error(`Message add failed: ${res.status}`);
+}
+
 // --- File access ---
 
 export function fileDownloadUrl(path: string): string {

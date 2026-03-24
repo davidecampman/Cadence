@@ -16,6 +16,12 @@ import {
   uninstallSkill,
   fileDownloadUrl,
   revealFile,
+  fetchChats,
+  fetchChat,
+  createChat as apiCreateChat,
+  updateChat as apiUpdateChat,
+  deleteChat as apiDeleteChat,
+  addChatMessage,
   type AppConfig,
   type ChatResponse,
   type TraceStep,
@@ -46,7 +52,7 @@ interface Chat {
   createdAt: number;
 }
 
-function loadChats(): Chat[] {
+function loadChatsFromLocalStorage(): Chat[] {
   try {
     const raw = localStorage.getItem('sentinel-chats');
     return raw ? JSON.parse(raw) : [];
@@ -55,7 +61,7 @@ function loadChats(): Chat[] {
   }
 }
 
-function saveChats(chats: Chat[]) {
+function saveChatsToLocalStorage(chats: Chat[]) {
   localStorage.setItem('sentinel-chats', JSON.stringify(chats));
 }
 
@@ -119,11 +125,12 @@ function App() {
     return saved === 'light';
   });
   const [view, setView] = useState<View>('chat');
-  const [chats, setChats] = useState<Chat[]>(loadChats);
+  const [chats, setChats] = useState<Chat[]>(loadChatsFromLocalStorage);
   const [activeChatId, setActiveChatId] = useState<string | null>(() => {
-    const saved = loadChats();
+    const saved = loadChatsFromLocalStorage();
     return saved.length > 0 ? saved[0].id : null;
   });
+  const [backendReady, setBackendReady] = useState(false);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [traceSteps, setTraceSteps] = useState<TraceStep[]>([]);
@@ -193,10 +200,75 @@ function App() {
   const activeChat = chats.find((c) => c.id === activeChatId) ?? null;
   const messages = activeChat?.messages ?? [];
 
-  // Persist chats to localStorage whenever they change
+  // Always keep localStorage as a fallback cache
   useEffect(() => {
-    saveChats(chats);
+    saveChatsToLocalStorage(chats);
   }, [chats]);
+
+  // Load chats from backend on mount (if server is available)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const serverChats = await fetchChats();
+        if (cancelled) return;
+        if (serverChats.length > 0) {
+          // Load full messages for each chat
+          const fullChats: Chat[] = await Promise.all(
+            serverChats.map(async (sc) => {
+              const full = await fetchChat(sc.id);
+              return {
+                id: full.id,
+                title: full.title,
+                sessionId: full.session_id ?? undefined,
+                createdAt: full.created_at * 1000,
+                messages: (full.messages ?? []).map((m) => ({
+                  id: m.id,
+                  role: m.role as 'user' | 'agent',
+                  content: m.content,
+                  timestamp: m.timestamp,
+                  duration_ms: m.duration_ms ?? undefined,
+                  trace_steps: (m.trace_steps as TraceStep[] | null) ?? undefined,
+                })),
+              };
+            })
+          );
+          if (!cancelled) {
+            setChats(fullChats);
+            setActiveChatId(fullChats[0]?.id ?? null);
+          }
+        } else {
+          // No server chats — migrate any localStorage chats to the backend
+          const local = loadChatsFromLocalStorage();
+          for (const lc of local) {
+            try {
+              await apiCreateChat(lc.id, lc.title, lc.createdAt / 1000);
+              if (lc.sessionId) {
+                await apiUpdateChat(lc.id, { session_id: lc.sessionId });
+              }
+              for (const msg of lc.messages) {
+                await addChatMessage(lc.id, {
+                  id: msg.id,
+                  role: msg.role,
+                  content: msg.content,
+                  timestamp: msg.timestamp,
+                  duration_ms: msg.duration_ms,
+                  trace_steps: msg.trace_steps as Record<string, unknown>[] | undefined,
+                });
+              }
+            } catch {
+              // Skip individual migration errors
+            }
+          }
+        }
+        if (!cancelled) setBackendReady(true);
+      } catch {
+        // Server offline — keep using localStorage chats
+        if (!cancelled) setBackendReady(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const createNewChat = useCallback(() => {
     const newChat: Chat = {
@@ -209,6 +281,8 @@ function App() {
     setActiveChatId(newChat.id);
     setView('chat');
     setInput('');
+    // Persist to backend
+    apiCreateChat(newChat.id, newChat.title, newChat.createdAt / 1000).catch(() => {});
   }, []);
 
   const deleteChat = useCallback((chatId: string) => {
@@ -219,6 +293,8 @@ function App() {
       }
       return next;
     });
+    // Persist to backend
+    apiDeleteChat(chatId).catch(() => {});
   }, [activeChatId]);
 
   const switchChat = useCallback((chatId: string) => {
@@ -490,6 +566,7 @@ function App() {
       chatId = newChat.id;
       setChats((prev) => [newChat, ...prev]);
       setActiveChatId(chatId);
+      apiCreateChat(newChat.id, newChat.title, newChat.createdAt / 1000).catch(() => {});
     }
 
     const userMsg: ChatMessage = {
@@ -500,6 +577,9 @@ function App() {
     };
 
     // Add user message and update title if first message
+    const isFirstMessage = (chats.find((c) => c.id === chatId)?.messages.length ?? 0) === 0;
+    const newTitle = isFirstMessage ? chatTitle([userMsg]) : undefined;
+
     setChats((prev) =>
       prev.map((c) => {
         if (c.id !== chatId) return c;
@@ -511,6 +591,17 @@ function App() {
       })
     );
     setLoading(true);
+
+    // Persist user message to backend
+    addChatMessage(chatId, {
+      id: userMsg.id,
+      role: userMsg.role,
+      content: userMsg.content,
+      timestamp: userMsg.timestamp,
+    }).catch(() => {});
+    if (newTitle) {
+      apiUpdateChat(chatId, { title: newTitle }).catch(() => {});
+    }
 
     const currentSessionId = chats.find((c) => c.id === chatId)?.sessionId;
 
@@ -535,6 +626,17 @@ function App() {
             : c
         )
       );
+
+      // Persist agent message and session_id to backend
+      addChatMessage(chatId, {
+        id: agentMsg.id,
+        role: agentMsg.role,
+        content: agentMsg.content,
+        timestamp: agentMsg.timestamp,
+        duration_ms: agentMsg.duration_ms,
+        trace_steps: agentMsg.trace_steps as Record<string, unknown>[] | undefined,
+      }).catch(() => {});
+      apiUpdateChat(chatId, { session_id: res.session_id }).catch(() => {});
     } catch (err) {
       const errorMsg: ChatMessage = {
         id: crypto.randomUUID(),
