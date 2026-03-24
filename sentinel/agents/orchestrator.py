@@ -12,6 +12,7 @@ from sentinel.core.trace import TraceLogger
 from sentinel.core.types import (
     AgentRole,
     Message,
+    PermissionTier,
     Role,
     Task,
     TaskStatus,
@@ -46,6 +47,7 @@ ROLES = {
         ),
         allowed_tools=["read_file", "write_file", "list_files", "search_files",
                         "execute_code", "shell", "memory_query", "memory_save"],
+        permission_tier=PermissionTier.PRIVILEGED,
     ),
     "reviewer": AgentRole(
         name="reviewer",
@@ -58,6 +60,7 @@ ROLES = {
     "general": AgentRole(
         name="general",
         description="A general-purpose agent that can use all available tools.",
+        permission_tier=PermissionTier.PRIVILEGED,
     ),
 }
 
