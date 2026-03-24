@@ -154,8 +154,9 @@ export interface ModelsListResponse {
   models: string[];
 }
 
-export async function fetchModels(provider: string): Promise<ModelsListResponse> {
-  const res = await fetch(`${API_BASE}/models/${provider}`);
+export async function fetchModels(provider: string, tier?: string): Promise<ModelsListResponse> {
+  const params = tier ? `?tier=${encodeURIComponent(tier)}` : '';
+  const res = await fetch(`${API_BASE}/models/${provider}${params}`);
   if (!res.ok) throw new Error(`Models fetch failed: ${res.status}`);
   return res.json();
 }

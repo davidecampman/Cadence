@@ -219,6 +219,10 @@ async def chat_completion(
         kwargs["tools"] = _tools_to_dicts(tools)
         kwargs["tool_choice"] = "auto"
 
+    # Let LiteLLM drop parameters unsupported by specific providers (e.g.
+    # Bedrock models that don't accept temperature/tools/tool_choice).
+    kwargs["drop_params"] = True
+
     response = await litellm.acompletion(**kwargs)
     choice = response.choices[0]
     message = choice.message
