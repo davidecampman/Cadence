@@ -38,12 +38,13 @@ agents:
   max_iterations_per_task: 25       # Circuit breaker per task
 
 memory:
-  backend: "chromadb"               # chromadb | faiss
-  persist_dir: "./data/memory"
+  backend: "sqlite"                 # sqlite (cross-platform, zero deps) | chromadb (vector search)
+  persist_dir: "auto"               # "auto" = platform-aware path, or explicit directory
   default_namespace: "shared"
   decay_rate: 0.05                  # Per-day relevance decay
   max_results: 10                   # Max results per query
   similarity_threshold: 0.7         # Minimum relevance score
+  session_persistence: true         # Persist conversations across restarts
 
 execution:
   timeout_seconds: 120              # Default execution timeout

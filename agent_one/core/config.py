@@ -45,12 +45,13 @@ class AgentsConfig(BaseModel):
 
 
 class MemoryConfig(BaseModel):
-    backend: str = "chromadb"
-    persist_dir: str = "./data/memory"
+    backend: str = "sqlite"  # "sqlite" (cross-platform) | "chromadb" (vector search)
+    persist_dir: str = "auto"  # "auto" = platform-aware default, or explicit path
     default_namespace: str = "shared"
     decay_rate: float = 0.05
     max_results: int = 10
     similarity_threshold: float = 0.7
+    session_persistence: bool = True  # Persist conversation history across restarts
 
 
 class ExecutionConfig(BaseModel):

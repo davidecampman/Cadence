@@ -5,7 +5,8 @@ from __future__ import annotations
 from agent_one.core.config import Config, load_config
 from agent_one.core.trace import TraceLogger
 from agent_one.agents.orchestrator import Orchestrator
-from agent_one.memory.store import MemoryStore
+from agent_one.memory.backend import create_memory_backend
+from agent_one.memory.sessions import SessionStore
 from agent_one.skills.loader import SkillLoader
 from agent_one.routing.router import SmartRouter
 from agent_one.tools.base import ToolRegistry
@@ -25,7 +26,8 @@ class AgentOneApp:
             trace_file=self.config.logging.trace_file,
             console=self.config.logging.rich_console,
         )
-        self.memory = MemoryStore()
+        self.memory = create_memory_backend()
+        self.sessions = SessionStore() if self.config.memory.session_persistence else None
         self.router = SmartRouter(self.config)
         self.skills = SkillLoader(self.config.skills.directories)
         self.tools = self._build_tool_registry()

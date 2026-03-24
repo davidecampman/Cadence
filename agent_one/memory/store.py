@@ -185,3 +185,28 @@ class MemoryStore:
         client = self._get_client()
         collections = client.list_collections()
         return [c.name for c in collections]
+
+    async def get_all(self, namespace: str | None = None) -> list[MemoryEntry]:
+        """Return every memory in a namespace (for export/migration)."""
+        ns = namespace or self._config.default_namespace
+        collection = self._get_collection(ns)
+        count = collection.count()
+        if count == 0:
+            return []
+
+        results = collection.get(limit=count)
+        entries = []
+        for i, doc_id in enumerate(results["ids"]):
+            meta = results["metadatas"][i] if results["metadatas"] else {}
+            content = results["documents"][i] if results["documents"] else ""
+            entries.append(MemoryEntry(
+                id=doc_id,
+                content=content,
+                namespace=ns,
+                importance=meta.get("importance", 0.5),
+                created_at=meta.get("created_at", 0.0),
+                metadata={k: v for k, v in meta.items()
+                          if k not in ("importance", "created_at", "source_agent")},
+                source_agent=meta.get("source_agent") or None,
+            ))
+        return entries
