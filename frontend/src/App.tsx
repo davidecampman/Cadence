@@ -12,6 +12,8 @@ import {
   saveBedrockKeys,
   deleteKey,
   fetchModels,
+  uploadSkill,
+  uninstallSkill,
   type AppConfig,
   type ChatResponse,
   type TraceStep,
@@ -64,6 +66,8 @@ function App() {
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelFilter, setModelFilter] = useState('');
   const [modelTarget, setModelTarget] = useState<'strong' | 'fast' | 'embedding'>('strong');
+  const [skillUploading, setSkillUploading] = useState(false);
+  const [skillMessage, setSkillMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [configDraft, setConfigDraft] = useState<{
     strong: string;
     fast: string;
@@ -78,6 +82,7 @@ function App() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const traceEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const skillFileRef = useRef<HTMLInputElement>(null);
 
   // Sync theme class on body
   useEffect(() => {
@@ -237,6 +242,38 @@ function App() {
       setKeysInfo(updated);
     } catch (err) {
       alert(`Failed to delete key: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  }, []);
+
+  const handleSkillUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setSkillUploading(true);
+    setSkillMessage(null);
+    try {
+      const result = await uploadSkill(file);
+      setSkillMessage({ type: 'success', text: `Installed "${result.skill.name}" v${result.skill.version}` });
+      const updated = await fetchSkills();
+      setSkills(updated);
+    } catch (err) {
+      setSkillMessage({ type: 'error', text: err instanceof Error ? err.message : 'Upload failed' });
+    } finally {
+      setSkillUploading(false);
+      // Reset input so same file can be re-uploaded
+      if (skillFileRef.current) skillFileRef.current.value = '';
+    }
+  }, []);
+
+  const handleSkillUninstall = useCallback(async (name: string) => {
+    if (!confirm(`Uninstall skill "${name}"? This will delete its files from disk.`)) return;
+    setSkillMessage(null);
+    try {
+      await uninstallSkill(name);
+      setSkillMessage({ type: 'success', text: `Uninstalled "${name}"` });
+      const updated = await fetchSkills();
+      setSkills(updated);
+    } catch (err) {
+      setSkillMessage({ type: 'error', text: err instanceof Error ? err.message : 'Uninstall failed' });
     }
   }, []);
 
@@ -506,17 +543,54 @@ function App() {
 
         {view === 'skills' && (
           <div className="info-panel">
-            <h2>Loaded Skills</h2>
+            <div className="skills-header">
+              <h2>Loaded Skills</h2>
+              <input
+                ref={skillFileRef}
+                type="file"
+                accept=".zip"
+                style={{ display: 'none' }}
+                onChange={handleSkillUpload}
+              />
+              <button
+                className="config-save-btn"
+                onClick={() => skillFileRef.current?.click()}
+                disabled={skillUploading || !online}
+                style={{ marginLeft: 'auto', padding: '6px 16px', fontSize: '13px' }}
+              >
+                {skillUploading ? 'Uploading...' : 'Upload Skill (.zip)'}
+              </button>
+            </div>
+            {skillMessage && (
+              <div className={`skill-message ${skillMessage.type}`}>
+                {skillMessage.text}
+                <button
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', marginLeft: 8, color: 'inherit', fontSize: '14px' }}
+                  onClick={() => setSkillMessage(null)}
+                >
+                  &#x2715;
+                </button>
+              </div>
+            )}
             {skills.map((skill) => (
-              <div key={skill.name} className="info-card">
-                <h3>{skill.name}</h3>
-                <p>{skill.description}</p>
-                <span className="tag">v{skill.version}</span>
+              <div key={skill.name} className="info-card skill-card">
+                <div className="skill-card-content">
+                  <h3>{skill.name}</h3>
+                  <p>{skill.description}</p>
+                  <span className="tag">v{skill.version}</span>
+                </div>
+                <button
+                  className="skill-uninstall-btn"
+                  onClick={() => handleSkillUninstall(skill.name)}
+                  title={`Uninstall ${skill.name}`}
+                >
+                  &#x1F5D1;
+                </button>
               </div>
             ))}
             {skills.length === 0 && (
               <p style={{ color: 'var(--text-muted)' }}>
-                {online ? 'No skills loaded.' : 'Connect to the API to see loaded skills.'}
+                {online ? 'No skills loaded. Upload a skill zip to get started.' : 'Connect to the API to see loaded skills.'}
               </p>
             )}
           </div>

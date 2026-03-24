@@ -277,3 +277,107 @@ def test_bedrock_native_tool_support():
     # Non-bedrock models should still work
     assert supports_native_tools("claude-sonnet-4-20250514")
     assert supports_native_tools("gpt-4o")
+
+
+# --- Skill Install / Uninstall ---
+
+def _make_skill_zip(skill_dir_name: str, skill_md_content: str) -> bytes:
+    """Helper to create an in-memory zip containing a SKILL.md."""
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(f"{skill_dir_name}/SKILL.md", skill_md_content)
+    return buf.getvalue()
+
+
+def test_skill_install_from_zip(tmp_path):
+    """Installing a skill from a zip creates the directory and registers it."""
+    skill_content = """---
+name: my-new-skill
+version: 1.0.0
+description: A brand new skill
+tags:
+  - test
+---
+
+# Instructions
+
+Do the new thing.
+"""
+    zip_data = _make_skill_zip("my-new-skill", skill_content)
+
+    loader = SkillLoader(directories=[str(tmp_path)])
+    loader.discover()
+    assert loader.get("my-new-skill") is None
+
+    skill = loader.install_from_zip(zip_data)
+    assert skill.name == "my-new-skill"
+    assert skill.version == "1.0.0"
+    assert skill.description == "A brand new skill"
+
+    # Verify it's on disk
+    assert (tmp_path / "my-new-skill" / "SKILL.md").exists()
+
+    # Verify it's in the registry
+    assert loader.get("my-new-skill") is not None
+
+
+def test_skill_install_overwrites_existing(tmp_path):
+    """Installing a skill with the same name overwrites the previous version."""
+    v1 = _make_skill_zip("upd-skill", "---\nname: upd-skill\nversion: 1.0.0\n---\nOld")
+    v2 = _make_skill_zip("upd-skill", "---\nname: upd-skill\nversion: 2.0.0\n---\nNew")
+
+    loader = SkillLoader(directories=[str(tmp_path)])
+    loader.discover()
+    loader.install_from_zip(v1)
+    assert loader.get("upd-skill").version == "1.0.0"
+
+    loader.install_from_zip(v2)
+    assert loader.get("upd-skill").version == "2.0.0"
+
+
+def test_skill_install_invalid_zip(tmp_path):
+    """Installing from invalid data raises ValueError."""
+    loader = SkillLoader(directories=[str(tmp_path)])
+    loader.discover()
+    with pytest.raises(ValueError, match="not a valid zip"):
+        loader.install_from_zip(b"not a zip file")
+
+
+def test_skill_install_no_skill_md(tmp_path):
+    """Zip without SKILL.md raises ValueError."""
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("README.md", "No skill here")
+    loader = SkillLoader(directories=[str(tmp_path)])
+    loader.discover()
+    with pytest.raises(ValueError, match="does not contain a SKILL.md"):
+        loader.install_from_zip(buf.getvalue())
+
+
+def test_skill_uninstall(tmp_path):
+    """Uninstalling a skill removes it from disk and registry."""
+    skill_dir = tmp_path / "removable"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("---\nname: removable\nversion: 1.0.0\n---\nContent")
+
+    loader = SkillLoader(directories=[str(tmp_path)])
+    loader.discover()
+    assert loader.get("removable") is not None
+
+    result = loader.uninstall("removable")
+    assert result is True
+    assert loader.get("removable") is None
+    assert not skill_dir.exists()
+
+
+def test_skill_uninstall_not_found(tmp_path):
+    """Uninstalling a nonexistent skill returns False."""
+    loader = SkillLoader(directories=[str(tmp_path)])
+    loader.discover()
+    assert loader.uninstall("ghost-skill") is False

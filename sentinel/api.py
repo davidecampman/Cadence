@@ -8,7 +8,7 @@ import time
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -177,6 +177,33 @@ async def get_skills():
         {"name": name, "version": s.version, "description": s.description}
         for name, s in skills.items()
     ]
+
+
+@app.post("/api/skills/upload")
+async def upload_skill(file: UploadFile):
+    """Upload a skill zip file to install a new skill (or update an existing one)."""
+    agent_app = get_app()
+    if not file.filename or not file.filename.endswith(".zip"):
+        return {"error": "File must be a .zip archive"}, 400
+    data = await file.read()
+    try:
+        skill = agent_app.skills.install_from_zip(data)
+    except ValueError as e:
+        return {"error": str(e)}, 400
+    return {
+        "status": "installed",
+        "skill": {"name": skill.name, "version": skill.version, "description": skill.description},
+    }
+
+
+@app.delete("/api/skills/{skill_name}")
+async def delete_skill(skill_name: str):
+    """Uninstall a skill by name, removing it from disk and memory."""
+    agent_app = get_app()
+    removed = agent_app.skills.uninstall(skill_name)
+    if not removed:
+        return {"error": f"Skill '{skill_name}' not found"}, 404
+    return {"status": "uninstalled", "skill": skill_name}
 
 
 @app.get("/api/tools")
