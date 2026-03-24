@@ -17,7 +17,7 @@ COPY pyproject.toml ./
 RUN pip install --no-cache-dir .
 
 # Copy application code
-COPY agent_one/ ./agent_one/
+COPY sentinel/ ./sentinel/
 COPY config/ ./config/
 COPY skills/ ./skills/
 
@@ -26,4 +26,4 @@ COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 
 EXPOSE 8000
 
-CMD ["agent-one-server"]
+CMD ["sentinel-server"]

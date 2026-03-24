@@ -2,7 +2,7 @@
 name: code-review
 version: 1.0.0
 description: Review code for bugs, security issues, and style improvements
-author: agent-one
+author: sentinel
 dependencies: []
 tags:
   - code
