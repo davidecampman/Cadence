@@ -68,6 +68,10 @@ function App() {
   const [modelTarget, setModelTarget] = useState<'strong' | 'fast' | 'embedding'>('strong');
   const [skillUploading, setSkillUploading] = useState(false);
   const [skillMessage, setSkillMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [disabledTools, setDisabledTools] = useState<Set<string>>(() => {
+    const saved = localStorage.getItem('sentinel-disabled-tools');
+    return saved ? new Set(JSON.parse(saved)) : new Set();
+  });
   const [configDraft, setConfigDraft] = useState<{
     strong: string;
     fast: string;
@@ -77,6 +81,14 @@ function App() {
     bedrock_region: string;
     provider: string;
     apiKey: string;
+    timeout_seconds: number;
+    restrict_network: boolean;
+    max_memory_mb: number;
+    max_cpu_seconds: number;
+    blocked_commands: string;
+    max_depth: number;
+    max_parallel: number;
+    max_iterations_per_task: number;
   } | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -137,6 +149,14 @@ function App() {
         bedrock_region: config.models.bedrock?.region ?? 'us-east-1',
         provider: '',
         apiKey: '',
+        timeout_seconds: config.execution?.timeout_seconds ?? 120,
+        restrict_network: config.execution?.restrict_network ?? false,
+        max_memory_mb: config.execution?.max_memory_mb ?? 512,
+        max_cpu_seconds: config.execution?.max_cpu_seconds ?? 60,
+        blocked_commands: config.execution?.blocked_commands?.join(', ') ?? '',
+        max_depth: config.agents?.max_depth ?? 5,
+        max_parallel: config.agents?.max_parallel ?? 4,
+        max_iterations_per_task: config.agents?.max_iterations_per_task ?? 25,
       });
     }
   }, [config, configDraft]);
@@ -165,6 +185,10 @@ function App() {
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean);
+      const blockedCmds = configDraft.blocked_commands
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
       const newConfig = await updateConfig({
         models: {
           strong: configDraft.strong,
@@ -175,6 +199,18 @@ function App() {
             enabled: configDraft.bedrock_enabled,
             region: configDraft.bedrock_region,
           },
+        },
+        execution: {
+          timeout_seconds: configDraft.timeout_seconds,
+          restrict_network: configDraft.restrict_network,
+          max_memory_mb: configDraft.max_memory_mb,
+          max_cpu_seconds: configDraft.max_cpu_seconds,
+          blocked_commands: blockedCmds,
+        },
+        agents: {
+          max_depth: configDraft.max_depth,
+          max_parallel: configDraft.max_parallel,
+          max_iterations_per_task: configDraft.max_iterations_per_task,
         },
       });
       setConfig(newConfig);
@@ -910,6 +946,188 @@ function App() {
                   )}
                 </div>
 
+                {/* Tool Permissions */}
+                <div className="config-section">
+                  <h3>Tool Permissions</h3>
+                  <p className="config-hint">
+                    Enable or disable individual tools. Disabled tools will not be offered to agents.
+                    Changes are saved to your browser.
+                  </p>
+                  {(() => {
+                    const categories: Record<string, ToolInfo[]> = {};
+                    tools.forEach((t) => {
+                      let cat = 'Other';
+                      if (['read_file', 'write_file', 'list_files', 'search_files'].includes(t.name)) cat = 'File Operations';
+                      else if (['execute_code', 'shell'].includes(t.name)) cat = 'Code Execution';
+                      else if (['memory_save', 'memory_query', 'memory_delete'].includes(t.name)) cat = 'Memory';
+                      else if (['web_fetch', 'http_request'].includes(t.name)) cat = 'Web & HTTP';
+                      else if (['git_status', 'git_diff', 'git_commit', 'git_log'].includes(t.name)) cat = 'Git';
+                      else if (['sql_query'].includes(t.name)) cat = 'Database';
+                      else if (['regex_replace', 'diff_patch', 'summarize_text'].includes(t.name)) cat = 'Text Processing';
+                      else if (['screenshot', 'image_describe'].includes(t.name)) cat = 'Vision';
+                      else if (['env_info', 'install_package', 'check_dependency'].includes(t.name)) cat = 'Environment';
+                      else if (['scratch_write', 'scratch_read'].includes(t.name)) cat = 'Scratchpad';
+                      else if (['delegate'].includes(t.name)) cat = 'Agent Delegation';
+                      (categories[cat] = categories[cat] || []).push(t);
+                    });
+                    const catOrder = [
+                      'File Operations', 'Code Execution', 'Git', 'Web & HTTP',
+                      'Database', 'Text Processing', 'Memory', 'Vision',
+                      'Environment', 'Scratchpad', 'Agent Delegation', 'Other',
+                    ];
+                    return catOrder
+                      .filter((cat) => categories[cat]?.length)
+                      .map((cat) => (
+                        <div key={cat} className="tool-category">
+                          <div className="tool-category-header">{cat}</div>
+                          <div className="tool-toggles">
+                            {categories[cat].map((t) => (
+                              <label key={t.name} className="tool-toggle-label" title={t.description}>
+                                <input
+                                  type="checkbox"
+                                  checked={!disabledTools.has(t.name)}
+                                  onChange={(e) => {
+                                    const next = new Set(disabledTools);
+                                    if (e.target.checked) {
+                                      next.delete(t.name);
+                                    } else {
+                                      next.add(t.name);
+                                    }
+                                    setDisabledTools(next);
+                                    localStorage.setItem('sentinel-disabled-tools', JSON.stringify([...next]));
+                                  }}
+                                />
+                                <span className="tool-toggle-name">{t.name}</span>
+                                <span className={`tool-toggle-tier tier-${t.permission_tier}`}>{t.permission_tier}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      ));
+                  })()}
+                  {tools.length === 0 && (
+                    <p style={{ color: 'var(--text-muted)', fontSize: '13px' }}>
+                      Connect to the API to manage tool permissions.
+                    </p>
+                  )}
+                </div>
+
+                {/* Execution Settings */}
+                <div className="config-section">
+                  <h3>Execution</h3>
+                  <p className="config-hint">
+                    Controls for code execution, shell commands, and tool sandboxing.
+                  </p>
+                  <div className="config-field">
+                    <label>
+                      Timeout (seconds)
+                      <span className="field-hint">Max execution time per tool call</span>
+                    </label>
+                    <input
+                      type="number"
+                      min={5}
+                      max={600}
+                      value={configDraft.timeout_seconds}
+                      onChange={(e) => setConfigDraft({ ...configDraft, timeout_seconds: parseInt(e.target.value) || 120 })}
+                    />
+                  </div>
+                  <div className="config-field">
+                    <label>
+                      Max Memory (MB)
+                      <span className="field-hint">Memory limit per subprocess</span>
+                    </label>
+                    <input
+                      type="number"
+                      min={64}
+                      max={8192}
+                      value={configDraft.max_memory_mb}
+                      onChange={(e) => setConfigDraft({ ...configDraft, max_memory_mb: parseInt(e.target.value) || 512 })}
+                    />
+                  </div>
+                  <div className="config-field">
+                    <label>
+                      Max CPU (seconds)
+                      <span className="field-hint">CPU time limit per subprocess</span>
+                    </label>
+                    <input
+                      type="number"
+                      min={5}
+                      max={300}
+                      value={configDraft.max_cpu_seconds}
+                      onChange={(e) => setConfigDraft({ ...configDraft, max_cpu_seconds: parseInt(e.target.value) || 60 })}
+                    />
+                  </div>
+                  <div className="config-field">
+                    <label className="bedrock-toggle-label">
+                      <input
+                        type="checkbox"
+                        checked={configDraft.restrict_network}
+                        onChange={(e) => setConfigDraft({ ...configDraft, restrict_network: e.target.checked })}
+                      />
+                      <span>Restrict network access (Linux only — uses namespace isolation)</span>
+                    </label>
+                  </div>
+                  <div className="config-field">
+                    <label>
+                      Blocked Commands
+                      <span className="field-hint">Comma-separated patterns that are always rejected</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={configDraft.blocked_commands}
+                      onChange={(e) => setConfigDraft({ ...configDraft, blocked_commands: e.target.value })}
+                      placeholder="rm -rf /, mkfs, dd if=, ..."
+                    />
+                  </div>
+                </div>
+
+                {/* Agent Settings */}
+                <div className="config-section">
+                  <h3>Agents</h3>
+                  <p className="config-hint">
+                    Controls for multi-agent orchestration and task execution.
+                  </p>
+                  <div className="config-field">
+                    <label>
+                      Max Parallel Agents
+                      <span className="field-hint">Concurrent agents running at once</span>
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={16}
+                      value={configDraft.max_parallel}
+                      onChange={(e) => setConfigDraft({ ...configDraft, max_parallel: parseInt(e.target.value) || 4 })}
+                    />
+                  </div>
+                  <div className="config-field">
+                    <label>
+                      Max Nesting Depth
+                      <span className="field-hint">How deep agents can delegate to sub-agents</span>
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={10}
+                      value={configDraft.max_depth}
+                      onChange={(e) => setConfigDraft({ ...configDraft, max_depth: parseInt(e.target.value) || 5 })}
+                    />
+                  </div>
+                  <div className="config-field">
+                    <label>
+                      Max Iterations per Task
+                      <span className="field-hint">Circuit breaker — stops runaway agents</span>
+                    </label>
+                    <input
+                      type="number"
+                      min={5}
+                      max={100}
+                      value={configDraft.max_iterations_per_task}
+                      onChange={(e) => setConfigDraft({ ...configDraft, max_iterations_per_task: parseInt(e.target.value) || 25 })}
+                    />
+                  </div>
+                </div>
+
                 {/* Save Button */}
                 <div className="config-actions">
                   <button
@@ -932,6 +1150,14 @@ function App() {
                           bedrock_region: config.models.bedrock?.region ?? 'us-east-1',
                           provider: configDraft.provider,
                           apiKey: '',
+                          timeout_seconds: config.execution?.timeout_seconds ?? 120,
+                          restrict_network: config.execution?.restrict_network ?? false,
+                          max_memory_mb: config.execution?.max_memory_mb ?? 512,
+                          max_cpu_seconds: config.execution?.max_cpu_seconds ?? 60,
+                          blocked_commands: config.execution?.blocked_commands?.join(', ') ?? '',
+                          max_depth: config.agents?.max_depth ?? 5,
+                          max_parallel: config.agents?.max_parallel ?? 4,
+                          max_iterations_per_task: config.agents?.max_iterations_per_task ?? 25,
                         });
                       }
                     }}
