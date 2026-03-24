@@ -438,6 +438,30 @@ async def list_models(provider: str, tier: str | None = None):
             else:
                 models.add(key)
 
+    # OpenRouter supports embedding models via passthrough, but litellm's
+    # registry doesn't list them.  Add well-known ones so the UI can offer them.
+    if provider == "openrouter":
+        _OPENROUTER_EMBEDDING_MODELS = [
+            "openrouter/openai/text-embedding-3-small",
+            "openrouter/openai/text-embedding-3-large",
+            "openrouter/openai/text-embedding-ada-002",
+            "openrouter/google/text-embedding-004",
+            "openrouter/mistralai/mistral-embed",
+            "openrouter/cohere/embed-english-v3.0",
+            "openrouter/cohere/embed-multilingual-v3.0",
+            "openrouter/cohere/embed-english-light-v3.0",
+            "openrouter/cohere/embed-multilingual-light-v3.0",
+        ]
+        for candidate in _OPENROUTER_EMBEDDING_MODELS:
+            is_embedding = any(kw in candidate.lower() for kw in _EMBEDDING_KEYWORDS)
+            if tier == "embedding" and not is_embedding:
+                continue
+            if tier in ("strong", "fast") and is_embedding:
+                continue
+            if tier is None and is_embedding:
+                continue
+            models.add(candidate)
+
     # For bedrock, also include models from our explicit mapping so users
     # always see the latest Claude models even if litellm's registry is outdated.
     if provider == "bedrock":
