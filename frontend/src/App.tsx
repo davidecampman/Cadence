@@ -140,10 +140,9 @@ function App() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const skillFileRef = useRef<HTMLInputElement>(null);
 
-  // Derived: active chat and its messages/sessionId
+  // Derived: active chat and its messages
   const activeChat = chats.find((c) => c.id === activeChatId) ?? null;
   const messages = activeChat?.messages ?? [];
-  const sessionId = activeChat?.sessionId;
 
   // Persist chats to localStorage whenever they change
   useEffect(() => {
@@ -177,13 +176,6 @@ function App() {
     setActiveChatId(chatId);
     setView('chat');
   }, []);
-
-  // Helper to update the active chat's data
-  const updateActiveChat = useCallback((updater: (chat: Chat) => Chat) => {
-    setChats((prev) =>
-      prev.map((c) => (c.id === activeChatId ? updater(c) : c))
-    );
-  }, [activeChatId]);
 
   // Sync theme class on body
   useEffect(() => {
