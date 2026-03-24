@@ -36,16 +36,47 @@ interface ChatMessage {
   trace_steps?: TraceStep[];
 }
 
+interface Chat {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  sessionId?: string;
+  createdAt: number;
+}
+
+function loadChats(): Chat[] {
+  try {
+    const raw = localStorage.getItem('sentinel-chats');
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveChats(chats: Chat[]) {
+  localStorage.setItem('sentinel-chats', JSON.stringify(chats));
+}
+
+function chatTitle(messages: ChatMessage[]): string {
+  const first = messages.find((m) => m.role === 'user');
+  if (!first) return 'New Chat';
+  const text = first.content.trim();
+  return text.length > 40 ? text.slice(0, 40) + '...' : text;
+}
+
 function App() {
   const [lightMode, setLightMode] = useState(() => {
     const saved = localStorage.getItem('sentinel-theme');
     return saved === 'light';
   });
   const [view, setView] = useState<View>('chat');
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [chats, setChats] = useState<Chat[]>(loadChats);
+  const [activeChatId, setActiveChatId] = useState<string | null>(() => {
+    const saved = loadChats();
+    return saved.length > 0 ? saved[0].id : null;
+  });
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [sessionId, setSessionId] = useState<string | undefined>();
   const [traceSteps, setTraceSteps] = useState<TraceStep[]>([]);
   const [traceOpen, setTraceOpen] = useState(false);
   const [online, setOnline] = useState(false);
@@ -103,6 +134,51 @@ function App() {
   const traceEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const skillFileRef = useRef<HTMLInputElement>(null);
+
+  // Derived: active chat and its messages/sessionId
+  const activeChat = chats.find((c) => c.id === activeChatId) ?? null;
+  const messages = activeChat?.messages ?? [];
+  const sessionId = activeChat?.sessionId;
+
+  // Persist chats to localStorage whenever they change
+  useEffect(() => {
+    saveChats(chats);
+  }, [chats]);
+
+  const createNewChat = useCallback(() => {
+    const newChat: Chat = {
+      id: crypto.randomUUID(),
+      title: 'New Chat',
+      messages: [],
+      createdAt: Date.now(),
+    };
+    setChats((prev) => [newChat, ...prev]);
+    setActiveChatId(newChat.id);
+    setView('chat');
+    setInput('');
+  }, []);
+
+  const deleteChat = useCallback((chatId: string) => {
+    setChats((prev) => {
+      const next = prev.filter((c) => c.id !== chatId);
+      if (activeChatId === chatId) {
+        setActiveChatId(next.length > 0 ? next[0].id : null);
+      }
+      return next;
+    });
+  }, [activeChatId]);
+
+  const switchChat = useCallback((chatId: string) => {
+    setActiveChatId(chatId);
+    setView('chat');
+  }, []);
+
+  // Helper to update the active chat's data
+  const updateActiveChat = useCallback((updater: (chat: Chat) => Chat) => {
+    setChats((prev) =>
+      prev.map((c) => (c.id === activeChatId ? updater(c) : c))
+    );
+  }, [activeChatId]);
 
   // Sync theme class on body
   useEffect(() => {
@@ -346,18 +422,44 @@ function App() {
     setInput('');
     setView('chat');
 
+    // If no active chat, create one
+    let chatId = activeChatId;
+    if (!chatId) {
+      const newChat: Chat = {
+        id: crypto.randomUUID(),
+        title: 'New Chat',
+        messages: [],
+        createdAt: Date.now(),
+      };
+      chatId = newChat.id;
+      setChats((prev) => [newChat, ...prev]);
+      setActiveChatId(chatId);
+    }
+
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
       role: 'user',
       content: msg,
       timestamp: Date.now() / 1000,
     };
-    setMessages((prev) => [...prev, userMsg]);
+
+    // Add user message and update title if first message
+    setChats((prev) =>
+      prev.map((c) => {
+        if (c.id !== chatId) return c;
+        const updated = { ...c, messages: [...c.messages, userMsg] };
+        if (c.messages.length === 0) {
+          updated.title = chatTitle([userMsg]);
+        }
+        return updated;
+      })
+    );
     setLoading(true);
 
+    const currentSessionId = chats.find((c) => c.id === chatId)?.sessionId;
+
     try {
-      const res: ChatResponse = await sendMessage(msg, sessionId);
-      setSessionId(res.session_id);
+      const res: ChatResponse = await sendMessage(msg, currentSessionId);
 
       const agentMsg: ChatMessage = {
         id: crypto.randomUUID(),
@@ -367,7 +469,14 @@ function App() {
         duration_ms: res.duration_ms,
         trace_steps: res.trace_steps,
       };
-      setMessages((prev) => [...prev, agentMsg]);
+
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === chatId
+            ? { ...c, messages: [...c.messages, agentMsg], sessionId: res.session_id }
+            : c
+        )
+      );
     } catch (err) {
       const errorMsg: ChatMessage = {
         id: crypto.randomUUID(),
@@ -375,11 +484,17 @@ function App() {
         content: `Connection error: ${err instanceof Error ? err.message : 'Unknown error'}. Make sure the API server is running.`,
         timestamp: Date.now() / 1000,
       };
-      setMessages((prev) => [...prev, errorMsg]);
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === chatId
+            ? { ...c, messages: [...c.messages, errorMsg] }
+            : c
+        )
+      );
     } finally {
       setLoading(false);
     }
-  }, [input, loading, sessionId]);
+  }, [input, loading, activeChatId, chats]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -413,14 +528,44 @@ function App() {
 
         <div className="sidebar-nav">
           <div className="sidebar-section">
+            <div className="sidebar-section-header">
+              <h3>Chats</h3>
+              <button
+                className="new-chat-btn"
+                onClick={createNewChat}
+                title="New Chat"
+              >
+                +
+              </button>
+            </div>
+            <div className="chat-list">
+              {chats.map((chat) => (
+                <div
+                  key={chat.id}
+                  className={`chat-list-item ${view === 'chat' && activeChatId === chat.id ? 'active' : ''}`}
+                  onClick={() => switchChat(chat.id)}
+                >
+                  <span className="chat-list-title">{chat.title}</span>
+                  <button
+                    className="chat-delete-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteChat(chat.id);
+                    }}
+                    title="Delete chat"
+                  >
+                    &#x2715;
+                  </button>
+                </div>
+              ))}
+              {chats.length === 0 && (
+                <div className="chat-list-empty">No chats yet</div>
+              )}
+            </div>
+          </div>
+
+          <div className="sidebar-section">
             <h3>Navigation</h3>
-            <button
-              className={`sidebar-item ${view === 'chat' ? 'active' : ''}`}
-              onClick={() => setView('chat')}
-            >
-              <span className="icon">&#x1F4AC;</span>
-              Chat
-            </button>
             <button
               className={`sidebar-item ${view === 'tools' ? 'active' : ''}`}
               onClick={() => setView('tools')}
