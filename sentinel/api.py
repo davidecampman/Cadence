@@ -429,11 +429,12 @@ async def list_models(provider: str, tier: str | None = None):
 
         if matched:
             # For bedrock, deduplicate regional/commitment variants
-            # e.g. "bedrock/us-east-1/anthropic.claude-..." → "bedrock/anthropic.claude-..."
+            # e.g. "bedrock/converse/us-east-1/anthropic.claude-..." → "bedrock/converse/anthropic.claude-..."
+            # Always use the converse route as it's the recommended Bedrock API path.
             if provider == "bedrock":
                 parts = key.split("/")
                 model_id = parts[-1]  # last component is always the model ID
-                models.add(f"bedrock/{model_id}")
+                models.add(f"bedrock/converse/{model_id}")
             else:
                 models.add(key)
 
