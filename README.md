@@ -1,8 +1,8 @@
-# Agent One
+# Sentinel
 
 A model-agnostic multi-agent framework with structured planning, tiered memory, and parallel task execution.
 
-Agent One enables autonomous agents to break down complex tasks into dependency graphs, delegate work to specialist agents, and coordinate results — all while maintaining persistent memory and reasoning traces.
+Sentinel enables autonomous agents to break down complex tasks into dependency graphs, delegate work to specialist agents, and coordinate results — all while maintaining persistent memory and reasoning traces.
 
 ## Features
 
@@ -49,7 +49,7 @@ export ANTHROPIC_API_KEY="your-key-here"
 ### Run the CLI
 
 ```bash
-agent-one
+sentinel
 ```
 
 Commands: `/skills`, `/trace`, `/config`, `/quit`
@@ -57,7 +57,7 @@ Commands: `/skills`, `/trace`, `/config`, `/quit`
 ### Run the API Server
 
 ```bash
-agent-one-server
+sentinel-server
 ```
 
 This serves the REST API at `http://localhost:8000/api`, WebSocket at `ws://localhost:8000/ws`, and the React frontend at `http://localhost:8000`.
@@ -71,7 +71,7 @@ docker-compose up --build
 ## Project Structure
 
 ```
-agent_one/
+sentinel/
 ├── agents/          # Multi-agent orchestration and task DAG execution
 ├── core/            # Agent loop, config, LLM abstraction, keystore, types
 ├── memory/          # ChromaDB-backed tiered memory with time decay
@@ -93,9 +93,9 @@ tests/               # Unit tests
 Configuration lives in `config/default.yaml` and can be overridden with environment variables:
 
 ```bash
-AGENT_ONE_MODELS_STRONG=gpt-4o
-AGENT_ONE_AGENTS_MAX_DEPTH=3
-AGENT_ONE_MEMORY_DECAY_RATE=0.1
+SENTINEL_MODELS_STRONG=gpt-4o
+SENTINEL_AGENTS_MAX_DEPTH=3
+SENTINEL_MEMORY_DECAY_RATE=0.1
 ```
 
 Key settings:

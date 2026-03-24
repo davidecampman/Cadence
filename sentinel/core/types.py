@@ -1,4 +1,4 @@
-"""Core type definitions for Agent One."""
+"""Core type definitions for Sentinel."""
 
 from __future__ import annotations
 

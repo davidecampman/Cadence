@@ -9,7 +9,7 @@ from typing import Any
 
 import litellm
 
-from agent_one.core.types import Message, Role, ToolCall, ToolDefinition
+from sentinel.core.types import Message, Role, ToolCall, ToolDefinition
 
 # Suppress LiteLLM's verbose logging
 litellm.suppress_debug_info = True

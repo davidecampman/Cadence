@@ -66,7 +66,7 @@ class LoggingConfig(BaseModel):
 
 
 class Config(BaseModel):
-    """Root configuration for Agent One."""
+    """Root configuration for Sentinel."""
 
     models: ModelConfig = Field(default_factory=ModelConfig)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
@@ -77,13 +77,13 @@ class Config(BaseModel):
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
 
-ENV_PREFIX = "AGENT_ONE_"
+ENV_PREFIX = "SENTINEL_"
 
 
 def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
     """Override nested config values from environment variables.
 
-    AGENT_ONE_MODELS_STRONG=gpt-4o -> data["models"]["strong"] = "gpt-4o"
+    SENTINEL_MODELS_STRONG=gpt-4o -> data["models"]["strong"] = "gpt-4o"
     """
     for key, value in os.environ.items():
         if not key.startswith(ENV_PREFIX):

@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from agent_one.core.types import AgentRole, PermissionTier
-from agent_one.tools.base import Tool
+from sentinel.core.types import AgentRole, PermissionTier
+from sentinel.tools.base import Tool
 
 if TYPE_CHECKING:
-    from agent_one.core.agent import Agent
-    from agent_one.core.config import Config
-    from agent_one.core.trace import TraceLogger
-    from agent_one.tools.base import ToolRegistry
+    from sentinel.core.agent import Agent
+    from sentinel.core.config import Config
+    from sentinel.core.trace import TraceLogger
+    from sentinel.tools.base import ToolRegistry
 
 
 class DelegateTool(Tool):
@@ -60,8 +60,8 @@ class DelegateTool(Tool):
         if self._parent_depth >= self._max_depth:
             return f"Cannot delegate: max agent depth ({self._max_depth}) reached."
 
-        from agent_one.agents.orchestrator import ROLES
-        from agent_one.core.agent import Agent
+        from sentinel.agents.orchestrator import ROLES
+        from sentinel.core.agent import Agent
 
         agent_role = ROLES.get(role, ROLES["general"])
         agent = Agent(

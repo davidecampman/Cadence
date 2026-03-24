@@ -1,6 +1,6 @@
-# Agent One - Default Configuration
-# Override any value via environment variables: AGENT_ONE_<SECTION>_<KEY>
-# e.g., AGENT_ONE_MODELS_STRONG=claude-opus-4-20250514
+# Sentinel - Default Configuration
+# Override any value via environment variables: SENTINEL_<SECTION>_<KEY>
+# e.g., SENTINEL_MODELS_STRONG=claude-opus-4-20250514
 
 models:
   # Smart routing: use the right model for the right job

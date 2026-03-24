@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from agent_one.core.types import PermissionTier
-from agent_one.memory.store import MemoryStore
-from agent_one.tools.base import Tool
+from sentinel.core.types import PermissionTier
+from sentinel.memory.store import MemoryStore
+from sentinel.tools.base import Tool
 
 
 class MemorySaveTool(Tool):

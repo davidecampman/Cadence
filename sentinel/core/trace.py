@@ -6,7 +6,7 @@ import json
 import logging
 from pathlib import Path
 
-from agent_one.core.types import TraceStep
+from sentinel.core.types import TraceStep
 
 logger = logging.getLogger(__name__)
 

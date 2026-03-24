@@ -6,11 +6,11 @@ import time
 from abc import ABC, abstractmethod
 from typing import Any
 
-from agent_one.core.types import PermissionTier, ToolDefinition, ToolResult
+from sentinel.core.types import PermissionTier, ToolDefinition, ToolResult
 
 
 class Tool(ABC):
-    """Abstract base for all Agent One tools.
+    """Abstract base for all Sentinel tools.
 
     Subclasses define:
       - name, description, parameters (the schema the LLM sees)

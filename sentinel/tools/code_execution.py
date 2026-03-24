@@ -7,9 +7,9 @@ import platform
 import shutil
 import tempfile
 
-from agent_one.core.config import get_config
-from agent_one.core.types import PermissionTier
-from agent_one.tools.base import Tool
+from sentinel.core.config import get_config
+from sentinel.core.types import PermissionTier
+from sentinel.tools.base import Tool
 
 # Whether we can use Linux-specific sandboxing (unshare, ulimit wrappers)
 _IS_LINUX = platform.system() == "Linux"
