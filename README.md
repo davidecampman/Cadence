@@ -12,6 +12,7 @@ Sentinel enables autonomous agents to break down complex tasks into dependency g
 - **Skill System** — Declarative SKILL.md format with versioning, dependency resolution, and auto-discovery
 - **Built-in Tools** — File operations, code execution (sandboxed), web fetching, memory management, and agent delegation
 - **Security & Sandboxing** — Permission tiers, execution timeouts, resource limits, and blocked command lists
+- **Persistent Chat Storage** — SQLite-backed chat and session history that survives server restarts, with automatic localStorage migration and offline fallback
 - **Reasoning Traces** — Step-by-step JSONL logging with WebSocket streaming to the frontend
 - **Web UI** — React frontend with chat, tool/skill browsers, config panel, and live reasoning trace
 
@@ -22,6 +23,7 @@ Sentinel enables autonomous agents to break down complex tasks into dependency g
 | Core | Python 3.11+, LiteLLM, Pydantic 2.0+ |
 | API | FastAPI, Uvicorn, WebSocket |
 | Memory | ChromaDB |
+| Storage | SQLite (WAL mode) |
 | Frontend | React 19, TypeScript, Vite |
 | Testing | pytest, pytest-asyncio, Ruff |
 | Deployment | pip, npm |
@@ -71,12 +73,14 @@ sentinel/
 ├── memory/          # ChromaDB-backed tiered memory with time decay
 ├── routing/         # Smart model routing with fallback chains
 ├── skills/          # SKILL.md parser with dependency resolution
+├── storage/         # SQLite-backed persistent chat and session storage
 ├── tools/           # Built-in tools (file ops, code exec, web, memory, delegation)
 ├── api.py           # FastAPI REST + WebSocket endpoints
 ├── cli.py           # Interactive REPL
 └── server.py        # API server entry point
 config/
 └── default.yaml     # Default configuration
+data/                # Runtime data (SQLite DB, traces, memory vectors)
 frontend/            # React + TypeScript web UI
 skills/              # Example skill definitions
 tests/               # Unit tests
@@ -108,8 +112,14 @@ Key settings:
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/chat` | Send a message |
+| GET | `/chats` | List all persisted chats |
+| GET | `/chats/{id}` | Get a chat with all messages |
+| POST | `/chats` | Create a new chat |
+| PUT | `/chats/{id}` | Update chat metadata |
+| DELETE | `/chats/{id}` | Delete a chat and its messages |
+| POST | `/chats/{id}/messages` | Add a message to a chat |
 | GET | `/config` | Get current configuration |
-| POST | `/config` | Update configuration |
+| PUT | `/config` | Update configuration |
 | GET | `/tools` | List available tools |
 | GET | `/skills` | List loaded skills |
 | GET | `/health` | Health check |
