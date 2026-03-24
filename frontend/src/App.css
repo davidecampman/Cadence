@@ -1092,6 +1092,124 @@ body.light-mode .key-input-row input {
   font-size: 12px !important;
 }
 
+/* ═══════════════════════════════════════════════
+   TOOL PERMISSIONS
+   ═══════════════════════════════════════════════ */
+.tool-category {
+  margin-bottom: 16px;
+}
+
+.tool-category-header {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tool-toggles {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tool-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s;
+}
+
+.tool-toggle-label:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+body.light-mode .tool-toggle-label:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.tool-toggle-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.tool-toggle-name {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  color: var(--text);
+  flex: 1;
+}
+
+.tool-toggle-tier {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.tool-toggle-tier.tier-read_only {
+  background: rgba(46, 204, 113, 0.15);
+  color: #2ecc71;
+}
+
+.tool-toggle-tier.tier-standard {
+  background: rgba(52, 152, 219, 0.15);
+  color: #3498db;
+}
+
+.tool-toggle-tier.tier-privileged {
+  background: rgba(243, 156, 18, 0.15);
+  color: #f39c12;
+}
+
+.tool-toggle-tier.tier-unrestricted {
+  background: rgba(231, 76, 60, 0.15);
+  color: #e74c3c;
+}
+
+body.light-mode .tool-toggle-tier.tier-read_only {
+  background: rgba(46, 204, 113, 0.1);
+  color: #1a9a5a;
+}
+
+body.light-mode .tool-toggle-tier.tier-standard {
+  background: rgba(52, 152, 219, 0.1);
+  color: #2376a8;
+}
+
+body.light-mode .tool-toggle-tier.tier-privileged {
+  background: rgba(243, 156, 18, 0.1);
+  color: #c47f0a;
+}
+
+body.light-mode .tool-toggle-tier.tier-unrestricted {
+  background: rgba(231, 76, 60, 0.1);
+  color: #c0392b;
+}
+
+/* Number inputs in config */
+.config-field input[type="number"] {
+  -moz-appearance: textfield;
+  width: 120px;
+}
+
+.config-field input[type="number"]::-webkit-inner-spin-button,
+.config-field input[type="number"]::-webkit-outer-spin-button {
+  opacity: 1;
+}
+
 @media (max-width: 768px) {
   .sidebar {
     display: none;

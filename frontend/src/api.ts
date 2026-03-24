@@ -52,12 +52,29 @@ export interface ModelsConfig {
   bedrock: BedrockConfig;
 }
 
+export interface ExecutionConfig {
+  timeout_seconds: number;
+  max_output_bytes: number;
+  restrict_network: boolean;
+  max_memory_mb: number;
+  max_cpu_seconds: number;
+  max_file_descriptors: number;
+  blocked_commands: string[];
+}
+
+export interface AgentsConfig {
+  max_depth: number;
+  max_parallel: number;
+  loop_detection_window: number;
+  max_iterations_per_task: number;
+}
+
 export interface AppConfig {
   models: ModelsConfig;
   budget: Record<string, unknown>;
-  agents: Record<string, unknown>;
+  agents: AgentsConfig;
   memory: Record<string, unknown>;
-  execution: Record<string, unknown>;
+  execution: ExecutionConfig;
   skills: Record<string, unknown>;
   logging: Record<string, unknown>;
 }
