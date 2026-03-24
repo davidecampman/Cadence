@@ -734,6 +734,50 @@ body.light-mode .config-json {
 /* ═══════════════════════════════════════════════
    CONFIG FORM — glass sections
    ═══════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════
+   CONFIG TABS
+   ═══════════════════════════════════════════════ */
+.config-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 20px;
+  background: rgba(10, 20, 50, 0.45);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px;
+}
+
+body.light-mode .config-tabs {
+  background: rgba(220, 238, 255, 0.55);
+}
+
+.config-tab {
+  flex: 1;
+  padding: 8px 16px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: center;
+}
+
+.config-tab:hover {
+  color: var(--text-primary);
+  background: rgba(45, 212, 191, 0.06);
+}
+
+.config-tab.active {
+  background: var(--accent-glow);
+  color: var(--accent);
+  border-color: rgba(45, 212, 191, 0.25);
+  font-weight: 600;
+}
+
 .config-subtitle {
   font-size: 13px;
   color: var(--text-secondary);

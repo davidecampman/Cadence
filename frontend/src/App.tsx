@@ -72,6 +72,7 @@ function App() {
     const saved = localStorage.getItem('sentinel-disabled-tools');
     return saved ? new Set(JSON.parse(saved)) : new Set();
   });
+  const [configTab, setConfigTab] = useState<'providers' | 'budget' | 'agents' | 'memory' | 'execution'>('providers');
   const [configDraft, setConfigDraft] = useState<{
     strong: string;
     fast: string;
@@ -86,9 +87,16 @@ function App() {
     max_memory_mb: number;
     max_cpu_seconds: number;
     blocked_commands: string;
+    max_tokens_per_task: number;
+    max_tokens_per_session: number;
+    warn_at_percentage: number;
     max_depth: number;
     max_parallel: number;
+    loop_detection_window: number;
     max_iterations_per_task: number;
+    decay_rate: number;
+    max_results: number;
+    similarity_threshold: number;
   } | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -154,9 +162,16 @@ function App() {
         max_memory_mb: config.execution?.max_memory_mb ?? 512,
         max_cpu_seconds: config.execution?.max_cpu_seconds ?? 60,
         blocked_commands: config.execution?.blocked_commands?.join(', ') ?? '',
-        max_depth: config.agents?.max_depth ?? 5,
-        max_parallel: config.agents?.max_parallel ?? 4,
-        max_iterations_per_task: config.agents?.max_iterations_per_task ?? 25,
+        max_tokens_per_task: config.budget.max_tokens_per_task,
+        max_tokens_per_session: config.budget.max_tokens_per_session,
+        warn_at_percentage: config.budget.warn_at_percentage,
+        max_depth: config.agents.max_depth,
+        max_parallel: config.agents.max_parallel,
+        loop_detection_window: config.agents.loop_detection_window,
+        max_iterations_per_task: config.agents.max_iterations_per_task,
+        decay_rate: config.memory.decay_rate,
+        max_results: config.memory.max_results,
+        similarity_threshold: config.memory.similarity_threshold,
       });
     }
   }, [config, configDraft]);
@@ -207,10 +222,21 @@ function App() {
           max_cpu_seconds: configDraft.max_cpu_seconds,
           blocked_commands: blockedCmds,
         },
+        budget: {
+          max_tokens_per_task: configDraft.max_tokens_per_task,
+          max_tokens_per_session: configDraft.max_tokens_per_session,
+          warn_at_percentage: configDraft.warn_at_percentage,
+        },
         agents: {
           max_depth: configDraft.max_depth,
           max_parallel: configDraft.max_parallel,
+          loop_detection_window: configDraft.loop_detection_window,
           max_iterations_per_task: configDraft.max_iterations_per_task,
+        },
+        memory: {
+          decay_rate: configDraft.decay_rate,
+          max_results: configDraft.max_results,
+          similarity_threshold: configDraft.similarity_threshold,
         },
       });
       setConfig(newConfig);
@@ -634,15 +660,33 @@ function App() {
 
         {view === 'config' && (
           <div className="info-panel">
-            <h2>LLM Providers</h2>
-            <p className="config-subtitle">
-              Configure which models are used for each task tier. Sentinel uses LiteLLM under the hood,
-              so any supported provider works (OpenAI, Anthropic, Google, Mistral, etc.).
-            </p>
+            <h2>Configuration</h2>
+
+            {/* Tab bar */}
+            <div className="config-tabs">
+              {([
+                ['providers', 'Providers'],
+                ['budget', 'Token Budget'],
+                ['agents', 'Agents'],
+                ['memory', 'Memory'],
+                ['execution', 'Execution'],
+              ] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  className={`config-tab${configTab === key ? ' active' : ''}`}
+                  onClick={() => setConfigTab(key)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
 
             {configDraft ? (
               <div className="config-form">
-                {/* Provider API Key */}
+
+                {/* ═══ PROVIDERS TAB ═══ */}
+                {configTab === 'providers' && (
+                  <>
                 <div className="config-section">
                   <h3>Provider API Keys</h3>
                   <p className="config-hint">
@@ -945,8 +989,182 @@ function App() {
                     </div>
                   )}
                 </div>
+                  </>
+                )}
 
-                {/* Tool Permissions */}
+                {/* ═══ BUDGET TAB ═══ */}
+                {configTab === 'budget' && (
+                  <>
+                <div className="config-section">
+                  <h3>Token Limits</h3>
+                  <p className="config-hint">
+                    Control how many tokens agents can consume per task and per session.
+                    The session budget is enforced across all agent runs, planning, synthesis, and evaluation.
+                  </p>
+                  <div className="config-field">
+                    <label>
+                      Max Tokens per Task
+                      <span className="field-hint">Circuit breaker for a single agent run</span>
+                    </label>
+                    <input
+                      type="number"
+                      value={configDraft.max_tokens_per_task}
+                      onChange={(e) => setConfigDraft({ ...configDraft, max_tokens_per_task: parseInt(e.target.value) || 0 })}
+                      min={1000}
+                      step={10000}
+                    />
+                  </div>
+                  <div className="config-field">
+                    <label>
+                      Max Tokens per Session
+                      <span className="field-hint">Total budget across all requests in a session</span>
+                    </label>
+                    <input
+                      type="number"
+                      value={configDraft.max_tokens_per_session}
+                      onChange={(e) => setConfigDraft({ ...configDraft, max_tokens_per_session: parseInt(e.target.value) || 0 })}
+                      min={1000}
+                      step={50000}
+                    />
+                  </div>
+                  <div className="config-field">
+                    <label>
+                      Warning Threshold (%)
+                      <span className="field-hint">Emit a trace warning when this % of session budget is used</span>
+                    </label>
+                    <input
+                      type="number"
+                      value={configDraft.warn_at_percentage}
+                      onChange={(e) => setConfigDraft({ ...configDraft, warn_at_percentage: parseInt(e.target.value) || 0 })}
+                      min={0}
+                      max={100}
+                    />
+                  </div>
+                </div>
+                  </>
+                )}
+
+                {/* ═══ AGENTS TAB ═══ */}
+                {configTab === 'agents' && (
+                  <>
+                <div className="config-section">
+                  <h3>Orchestration</h3>
+                  <p className="config-hint">
+                    Tune how the orchestrator decomposes tasks and manages specialist agents.
+                  </p>
+                  <div className="config-field">
+                    <label>
+                      Max Parallel Agents
+                      <span className="field-hint">How many agents can run concurrently on subtasks</span>
+                    </label>
+                    <input
+                      type="number"
+                      value={configDraft.max_parallel}
+                      onChange={(e) => setConfigDraft({ ...configDraft, max_parallel: parseInt(e.target.value) || 1 })}
+                      min={1}
+                      max={16}
+                    />
+                  </div>
+                  <div className="config-field">
+                    <label>
+                      Max Delegation Depth
+                      <span className="field-hint">How deep agents can delegate to sub-agents</span>
+                    </label>
+                    <input
+                      type="number"
+                      value={configDraft.max_depth}
+                      onChange={(e) => setConfigDraft({ ...configDraft, max_depth: parseInt(e.target.value) || 1 })}
+                      min={1}
+                      max={10}
+                    />
+                  </div>
+                  <div className="config-field">
+                    <label>
+                      Max Iterations per Task
+                      <span className="field-hint">Circuit breaker: max think-act-observe loops per agent</span>
+                    </label>
+                    <input
+                      type="number"
+                      value={configDraft.max_iterations_per_task}
+                      onChange={(e) => setConfigDraft({ ...configDraft, max_iterations_per_task: parseInt(e.target.value) || 1 })}
+                      min={1}
+                      max={100}
+                    />
+                  </div>
+                  <div className="config-field">
+                    <label>
+                      Loop Detection Window
+                      <span className="field-hint">Number of recent outputs to compare for stuck-loop detection</span>
+                    </label>
+                    <input
+                      type="number"
+                      value={configDraft.loop_detection_window}
+                      onChange={(e) => setConfigDraft({ ...configDraft, loop_detection_window: parseInt(e.target.value) || 2 })}
+                      min={2}
+                      max={20}
+                    />
+                  </div>
+                </div>
+                  </>
+                )}
+
+                {/* ═══ MEMORY TAB ═══ */}
+                {configTab === 'memory' && (
+                  <>
+                <div className="config-section">
+                  <h3>Memory Retrieval</h3>
+                  <p className="config-hint">
+                    Configure how the tiered memory system stores and retrieves memories.
+                    Each agent now has its own private namespace; these settings apply globally.
+                  </p>
+                  <div className="config-field">
+                    <label>
+                      Decay Rate
+                      <span className="field-hint">How fast memories lose relevance over time (per day, 0 = no decay)</span>
+                    </label>
+                    <input
+                      type="number"
+                      value={configDraft.decay_rate}
+                      onChange={(e) => setConfigDraft({ ...configDraft, decay_rate: parseFloat(e.target.value) || 0 })}
+                      min={0}
+                      max={1}
+                      step={0.01}
+                    />
+                  </div>
+                  <div className="config-field">
+                    <label>
+                      Similarity Threshold
+                      <span className="field-hint">Minimum relevance score (0-1) for a memory to be returned</span>
+                    </label>
+                    <input
+                      type="number"
+                      value={configDraft.similarity_threshold}
+                      onChange={(e) => setConfigDraft({ ...configDraft, similarity_threshold: parseFloat(e.target.value) || 0 })}
+                      min={0}
+                      max={1}
+                      step={0.05}
+                    />
+                  </div>
+                  <div className="config-field">
+                    <label>
+                      Max Results
+                      <span className="field-hint">Default maximum memories returned per query</span>
+                    </label>
+                    <input
+                      type="number"
+                      value={configDraft.max_results}
+                      onChange={(e) => setConfigDraft({ ...configDraft, max_results: parseInt(e.target.value) || 1 })}
+                      min={1}
+                      max={50}
+                    />
+                  </div>
+                </div>
+                  </>
+                )}
+
+                {/* ═══ EXECUTION TAB ═══ */}
+                {configTab === 'execution' && (
+                  <>
                 <div className="config-section">
                   <h3>Tool Permissions</h3>
                   <p className="config-hint">
@@ -1012,9 +1230,8 @@ function App() {
                   )}
                 </div>
 
-                {/* Execution Settings */}
                 <div className="config-section">
-                  <h3>Execution</h3>
+                  <h3>Sandbox Limits</h3>
                   <p className="config-hint">
                     Controls for code execution, shell commands, and tool sandboxing.
                   </p>
@@ -1080,53 +1297,8 @@ function App() {
                     />
                   </div>
                 </div>
-
-                {/* Agent Settings */}
-                <div className="config-section">
-                  <h3>Agents</h3>
-                  <p className="config-hint">
-                    Controls for multi-agent orchestration and task execution.
-                  </p>
-                  <div className="config-field">
-                    <label>
-                      Max Parallel Agents
-                      <span className="field-hint">Concurrent agents running at once</span>
-                    </label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={16}
-                      value={configDraft.max_parallel}
-                      onChange={(e) => setConfigDraft({ ...configDraft, max_parallel: parseInt(e.target.value) || 4 })}
-                    />
-                  </div>
-                  <div className="config-field">
-                    <label>
-                      Max Nesting Depth
-                      <span className="field-hint">How deep agents can delegate to sub-agents</span>
-                    </label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={10}
-                      value={configDraft.max_depth}
-                      onChange={(e) => setConfigDraft({ ...configDraft, max_depth: parseInt(e.target.value) || 5 })}
-                    />
-                  </div>
-                  <div className="config-field">
-                    <label>
-                      Max Iterations per Task
-                      <span className="field-hint">Circuit breaker — stops runaway agents</span>
-                    </label>
-                    <input
-                      type="number"
-                      min={5}
-                      max={100}
-                      value={configDraft.max_iterations_per_task}
-                      onChange={(e) => setConfigDraft({ ...configDraft, max_iterations_per_task: parseInt(e.target.value) || 25 })}
-                    />
-                  </div>
-                </div>
+                  </>
+                )}
 
                 {/* Save Button */}
                 <div className="config-actions">
@@ -1155,9 +1327,16 @@ function App() {
                           max_memory_mb: config.execution?.max_memory_mb ?? 512,
                           max_cpu_seconds: config.execution?.max_cpu_seconds ?? 60,
                           blocked_commands: config.execution?.blocked_commands?.join(', ') ?? '',
-                          max_depth: config.agents?.max_depth ?? 5,
-                          max_parallel: config.agents?.max_parallel ?? 4,
-                          max_iterations_per_task: config.agents?.max_iterations_per_task ?? 25,
+                          max_tokens_per_task: config.budget.max_tokens_per_task,
+                          max_tokens_per_session: config.budget.max_tokens_per_session,
+                          warn_at_percentage: config.budget.warn_at_percentage,
+                          max_depth: config.agents.max_depth,
+                          max_parallel: config.agents.max_parallel,
+                          loop_detection_window: config.agents.loop_detection_window,
+                          max_iterations_per_task: config.agents.max_iterations_per_task,
+                          decay_rate: config.memory.decay_rate,
+                          max_results: config.memory.max_results,
+                          similarity_threshold: config.memory.similarity_threshold,
                         });
                       }
                     }}
