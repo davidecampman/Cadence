@@ -327,24 +327,26 @@ async def remove_key(provider: str):
 
 
 @app.get("/api/models/{provider}")
-async def list_models(provider: str):
+async def list_models(provider: str, tier: str | None = None):
     """Return available model names for a provider using litellm's model registry.
 
     Filters litellm's known model list by provider-specific prefixes or naming
-    patterns. Only returns text/chat models (excludes image, audio, embedding).
+    patterns. When ``tier`` is provided (strong, fast, embedding), further
+    filters to models appropriate for that use case.
     """
     from litellm import model_cost
 
     provider = provider.lower()
+    tier = tier.lower() if tier else None
 
     # Provider prefix/pattern mapping.
     # Some providers use a "prefix/" style in litellm, others use name patterns.
     _PROVIDER_FILTERS: dict[str, dict] = {
-        "openai": {"prefixes": ["gpt-", "o1", "o3", "o4", "chatgpt-"], "litellm_prefix": "openai/"},
-        "anthropic": {"prefixes": ["claude-"]},
+        "openai": {"prefixes": ["gpt-", "o1", "o3", "o4", "chatgpt-", "text-embedding-"], "litellm_prefix": "openai/"},
+        "anthropic": {"prefixes": ["claude-", "voyage-"]},
         "google": {"litellm_prefix": "gemini/"},
-        "mistral": {"litellm_prefix": "mistral/"},
-        "cohere": {"prefixes": ["command-"]},
+        "mistral": {"prefixes": ["mistral-embed"], "litellm_prefix": "mistral/"},
+        "cohere": {"prefixes": ["command-", "embed-"]},
         "deepseek": {"prefixes": ["deepseek-"], "litellm_prefix": "deepseek/"},
         "groq": {"litellm_prefix": "groq/"},
         "ollama": {"litellm_prefix": "ollama/"},
@@ -355,18 +357,36 @@ async def list_models(provider: str):
     if not filt:
         return {"provider": provider, "models": []}
 
-    # Patterns to exclude (images, audio, embedding, etc.)
-    _EXCLUDE = (
-        "dall-e", "tts-", "whisper", "embed", "moderation",
+    # --- Tier-based exclusion / inclusion patterns ---
+    # Embedding tier: only show embedding models.
+    # Strong/Fast tiers: exclude embedding, image, audio, etc.
+    # No tier: show all text/chat models (existing behaviour).
+
+    _EXCLUDE_NON_TEXT = (
+        "dall-e", "tts-", "whisper", "moderation",
         "stable-diffusion", "canvas", "image", "video", "audio",
         "rerank", "polly", "transcribe",
     )
 
+    _EMBEDDING_KEYWORDS = ("embed",)
+
     models: set[str] = set()
     for key in model_cost:
         key_lower = key.lower()
-        # Skip non-text models
-        if any(ex in key_lower for ex in _EXCLUDE):
+
+        # Always skip non-text media models
+        if any(ex in key_lower for ex in _EXCLUDE_NON_TEXT):
+            continue
+
+        is_embedding = any(kw in key_lower for kw in _EMBEDDING_KEYWORDS)
+
+        # Tier-based filtering
+        if tier == "embedding" and not is_embedding:
+            continue
+        if tier in ("strong", "fast") and is_embedding:
+            continue
+        # When no tier specified, exclude embeddings (original behaviour)
+        if tier is None and is_embedding:
             continue
 
         matched = False

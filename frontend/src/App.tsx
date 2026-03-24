@@ -136,7 +136,7 @@ function App() {
     }
   }, [config, configDraft]);
 
-  // Fetch available models when provider changes
+  // Fetch available models when provider or tier changes
   useEffect(() => {
     const provider = configDraft?.provider;
     if (!provider) {
@@ -145,11 +145,11 @@ function App() {
     }
     setModelsLoading(true);
     setModelFilter('');
-    fetchModels(provider)
+    fetchModels(provider, modelTarget)
       .then((res) => setProviderModels(res.models))
       .catch(() => setProviderModels([]))
       .finally(() => setModelsLoading(false));
-  }, [configDraft?.provider]);
+  }, [configDraft?.provider, modelTarget]);
 
   const handleConfigSave = useCallback(async () => {
     if (!configDraft) return;
