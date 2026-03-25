@@ -140,6 +140,44 @@ def _extract_tool_calls_from_text(text: str) -> list[ToolCall]:
     return calls
 
 
+# Map model name prefixes to the environment variable the direct provider needs.
+# Used to detect when a model should be rerouted through OpenRouter.
+_MODEL_PROVIDER_ENV: list[tuple[str, str]] = [
+    ("claude-", "ANTHROPIC_API_KEY"),
+    ("gpt-", "OPENAI_API_KEY"),
+    ("gemini-", "GEMINI_API_KEY"),
+    ("mistral", "MISTRAL_API_KEY"),
+    ("command-r", "COHERE_API_KEY"),
+    ("deepseek", "DEEPSEEK_API_KEY"),
+]
+
+
+def _maybe_reroute_model(model: str) -> str:
+    """Auto-prefix a model with ``openrouter/`` when the direct provider key
+    is missing but an OpenRouter key is available.
+
+    This prevents ``litellm.AuthenticationError`` when users configure only
+    OpenRouter but the config contains bare model names like
+    ``claude-sonnet-4-5-20250514``.
+    """
+    # Skip if already provider-prefixed (e.g. openrouter/, bedrock/, etc.)
+    if "/" in model:
+        return model
+
+    openrouter_key = os.environ.get("OPENROUTER_API_KEY")
+    if not openrouter_key:
+        return model
+
+    model_lower = model.lower()
+    for prefix, env_var in _MODEL_PROVIDER_ENV:
+        if model_lower.startswith(prefix):
+            if not os.environ.get(env_var):
+                return f"openrouter/{model}"
+            break  # Direct key exists; use the native provider
+
+    return model
+
+
 # Models known to support native function calling / tool_use
 _NATIVE_TOOL_USE_PREFIXES = (
     "gpt-4", "gpt-3.5", "claude-", "gemini-", "mistral",
@@ -240,6 +278,9 @@ async def chat_completion(
     For Bedrock models, either pass a bedrock_config or use the ``bedrock/``
     model prefix with AWS credentials configured via environment variables.
     """
+    # Auto-reroute through OpenRouter when direct provider key is missing
+    model = _maybe_reroute_model(model)
+
     # Apply Bedrock env vars if a config is provided
     bedrock_extra: dict[str, Any] = {}
     if bedrock_config and bedrock_config.enabled:
