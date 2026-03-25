@@ -203,14 +203,27 @@ graph LR
         file_ops[file_ops.py]
         code_exec[code_execution.py]
         web[web.py]
+        browser_tool[browser.py<br/>Playwright]
         mem_tools[memory_tools.py]
+        kb_tools[knowledge_tools.py]
+        prompt_tools[prompt_tools.py]
         delegate[delegate.py]
         git[git_ops.py]
-        other[+ 7 more tools]
+        other[+ 6 more tools]
     end
 
     subgraph sentinel/memory
-        store[store.py<br/>ChromaDB + decay]
+        memstore[store.py<br/>ChromaDB + decay]
+    end
+
+    subgraph sentinel/knowledge
+        kbstore[store.py<br/>Document search]
+        parsers[parsers.py<br/>PDF/DOCX/email]
+    end
+
+    subgraph sentinel/prompts
+        prompt_store[store.py<br/>Modification DB]
+        evolution[evolution.py<br/>LLM reflection]
     end
 
     subgraph sentinel/routing
@@ -219,6 +232,10 @@ graph LR
 
     subgraph sentinel/skills
         loader[loader.py<br/>SKILL.md parser]
+    end
+
+    subgraph sentinel/storage
+        chat_store[chat_store.py<br/>SQLite persistence]
     end
 
     subgraph API
@@ -231,11 +248,14 @@ graph LR
         react[React 19 + TS + Vite]
     end
 
-    app --> orch & agent & config & llm & store & router & loader & base
+    app --> orch & agent & config & llm & memstore & router & loader & base
     orch --> agent
-    agent --> llm & base & store
+    agent --> llm & base & memstore
     llm --> router
-    api --> app
+    kb_tools --> kbstore
+    kbstore --> parsers
+    prompt_tools --> prompt_store & evolution
+    api --> app & chat_store
     cli --> app
     react -->|HTTP + WS| api
 ```
@@ -245,12 +265,16 @@ graph LR
 - **Multi-Agent Orchestration** — Task DAG with dependency resolution, specialist agent roles (researcher, coder, reviewer), parallel execution, and loop detection
 - **Smart Model Routing** — Two-tier model strategy (fast/strong), automatic task classification, fallback chains, and per-model success tracking
 - **Tiered Memory** — ChromaDB-backed vector store with time-decay relevance scoring, importance weighting, and namespace isolation
+- **Knowledge Base Ingestion** — Ingest and search across PDFs, DOCX, emails (.eml), web pages, and plain text with automatic chunking and semantic search
+- **Self-Modifying Prompts** — LLM-driven prompt evolution with reflection after tasks, performance-based modifications, version history, and rollback
 - **Skill System** — Declarative SKILL.md format with versioning, dependency resolution, and auto-discovery
-- **Built-in Tools** — File operations, code execution (sandboxed), web fetching, memory management, and agent delegation
-- **Security & Sandboxing** — Permission tiers, execution timeouts, resource limits, and blocked command lists
+- **Built-in Tools** — File operations, code execution (sandboxed), web fetching, memory management, browser automation, knowledge base, prompt management, and agent delegation
+- **Browser Automation** — Playwright-powered headless browsing with navigation, clicking, form filling, screenshots, and structured data extraction
+- **Security & Sandboxing** — Permission tiers (read-only, standard, privileged, unrestricted), execution timeouts, resource limits, path allowlists, and blocked command lists
 - **Persistent Chat Storage** — SQLite-backed chat and session history that survives server restarts, with automatic localStorage migration and offline fallback
+- **Conversation Context Management** — Configurable history window with automatic LLM-based compression of older turns
 - **Reasoning Traces** — Step-by-step JSONL logging with WebSocket streaming to the frontend
-- **Web UI** — React frontend with chat, tool/skill browsers, config panel, and live reasoning trace
+- **Web UI** — React frontend with multi-chat sidebar, tabbed config panel (token budget, agents, memory), tool/skill browsers, and live reasoning trace
 
 ## Tech Stack
 
@@ -259,7 +283,10 @@ graph LR
 | Core | Python 3.11+, LiteLLM, Pydantic 2.0+ |
 | API | FastAPI, Uvicorn, WebSocket |
 | Memory | ChromaDB |
+| Knowledge | ChromaDB, PyPDF, python-docx, BeautifulSoup4 |
 | Storage | SQLite (WAL mode) |
+| Browser | Playwright (optional) |
+| Cloud | AWS Bedrock via boto3 (optional) |
 | Frontend | React 19, TypeScript, Vite |
 | Testing | pytest, pytest-asyncio, Ruff |
 | Deployment | pip, npm |
@@ -276,6 +303,10 @@ graph LR
 ```bash
 # Install Python package in dev mode
 pip install -e ".[dev]"
+
+# Install with browser automation support (optional)
+pip install -e ".[dev,browser]"
+playwright install chromium
 
 # Install frontend dependencies
 cd frontend && npm ci && cd ..
@@ -306,11 +337,13 @@ This serves the REST API at `http://localhost:8000/api`, WebSocket at `ws://loca
 sentinel/
 ├── agents/          # Multi-agent orchestration and task DAG execution
 ├── core/            # Agent loop, config, LLM abstraction, keystore, types
+├── knowledge/       # Knowledge base ingestion, document parsing, and semantic search
 ├── memory/          # ChromaDB-backed tiered memory with time decay
+├── prompts/         # Self-modifying prompt evolution and version tracking
 ├── routing/         # Smart model routing with fallback chains
 ├── skills/          # SKILL.md parser with dependency resolution
 ├── storage/         # SQLite-backed persistent chat and session storage
-├── tools/           # Built-in tools (file ops, code exec, web, memory, delegation)
+├── tools/           # Built-in tools (see Tools section below)
 ├── api.py           # FastAPI REST + WebSocket endpoints
 ├── cli.py           # Interactive REPL
 └── server.py        # API server entry point
@@ -319,7 +352,7 @@ config/
 data/                # Runtime data (SQLite DB, traces, memory vectors)
 frontend/            # React + TypeScript web UI
 skills/              # Example skill definitions
-tests/               # Unit tests
+tests/               # Unit and integration tests
 ```
 
 ## Configuration
@@ -336,12 +369,34 @@ Key settings:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `models.strong` | claude-sonnet-4-20250514 | Model for complex reasoning and code |
+| `models.strong` | claude-sonnet-4-5-20250514 | Model for complex reasoning and code |
 | `models.fast` | claude-haiku-4-5-20251001 | Model for planning and simple tasks |
+| `models.embedding` | text-embedding-3-small | Model for memory and KB embeddings |
 | `agents.max_parallel` | 4 | Max concurrent agents |
 | `agents.max_iterations_per_task` | 25 | Circuit breaker per task |
+| `budget.max_tokens_per_task` | 100000 | Per-task token ceiling |
+| `budget.max_tokens_per_session` | 500000 | Per-session token ceiling |
 | `memory.decay_rate` | 0.05 | Relevance decay per day |
+| `conversation.max_history_turns` | 50 | Max user+assistant pairs to retain |
+| `conversation.compression_enabled` | true | Summarize older context automatically |
+| `prompt_evolution.enabled` | true | Enable self-modifying prompt system |
 | `execution.timeout_seconds` | 120 | Per-execution timeout |
+
+## Built-in Tools
+
+| Tool | Permission | Description |
+|------|-----------|-------------|
+| ReadFile, WriteFile, ListFiles, SearchFiles | STANDARD | File operations with path safety checks |
+| CodeExecution | PRIVILEGED | Sandboxed code/shell execution with resource limits |
+| WebFetch | STANDARD | HTTP requests and web page fetching |
+| BrowseWeb, BrowserClick, BrowserForm, BrowserScreenshot, BrowserExtract | PRIVILEGED | Playwright-powered headless browser automation |
+| MemorySave, MemoryQuery, MemoryDelete | STANDARD | Tiered memory with namespace isolation |
+| KBIngest, KBSearch, KBList, KBDelete | STANDARD | Knowledge base document ingestion and search |
+| PromptView, PromptModify, PromptHistory, PromptRollback | STANDARD | Self-modifying prompt management |
+| Delegate | STANDARD | Spawn sub-agents for parallel task execution |
+| GitOps | PRIVILEGED | Git operations (status, diff, commit, branch) |
+| Database | PRIVILEGED | Database queries and schema inspection |
+| HTTPClient | STANDARD | Structured HTTP API calls |
 
 ## API Endpoints
 
@@ -363,6 +418,14 @@ Key settings:
 | GET | `/keys` | List stored API key providers |
 | POST | `/keys` | Store an API key |
 | DELETE | `/keys/{provider}` | Remove a stored key |
+| POST | `/api/kb/ingest` | Ingest a document from path, URL, or text |
+| POST | `/api/kb/ingest/upload` | Ingest an uploaded file |
+| POST | `/api/kb/search` | Semantic search across knowledge base |
+| GET | `/api/kb/documents` | List all ingested documents |
+| DELETE | `/api/kb/documents/{id}` | Delete a document |
+| GET | `/api/kb/stats` | Knowledge base statistics |
+| GET | `/api/files/download` | Download a project file |
+| GET | `/api/files/reveal` | Open file location in system file manager |
 
 ## Testing
 
