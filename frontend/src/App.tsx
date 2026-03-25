@@ -29,6 +29,7 @@ import {
   type SkillInfo,
   type WsMessage,
   type KeysResponse,
+  type ImageAttachment,
 } from './api'
 import BackgroundCanvas from './BackgroundCanvas'
 import './App.css'
@@ -191,10 +192,14 @@ function App() {
     compression_threshold: number;
   } | null>(null);
 
+  const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const traceEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const skillFileRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Derived: active chat and its messages
   const activeChat = chats.find((c) => c.id === activeChatId) ?? null;
@@ -532,11 +537,94 @@ function App() {
     }
   }, []);
 
+  // --- File attachment helpers ---
+  const ACCEPTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+  const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
+
+  const fileToAttachment = useCallback((file: File): Promise<ImageAttachment | null> => {
+    return new Promise((resolve) => {
+      if (!ACCEPTED_IMAGE_TYPES.includes(file.type)) {
+        resolve(null);
+        return;
+      }
+      if (file.size > MAX_FILE_SIZE) {
+        resolve(null);
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        // Strip data URL prefix to get pure base64
+        const base64 = result.split(',')[1];
+        if (base64) {
+          resolve({ data: base64, media_type: file.type, name: file.name });
+        } else {
+          resolve(null);
+        }
+      };
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(file);
+    });
+  }, []);
+
+  const addFiles = useCallback(async (files: FileList | File[]) => {
+    const fileArray = Array.from(files);
+    const results = await Promise.all(fileArray.map(fileToAttachment));
+    const valid = results.filter((r): r is ImageAttachment => r !== null);
+    if (valid.length > 0) {
+      setAttachments((prev) => [...prev, ...valid]);
+    }
+  }, [fileToAttachment]);
+
+  const removeAttachment = useCallback((index: number) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  // Drag and drop handlers
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    if (e.dataTransfer.files.length > 0) {
+      addFiles(e.dataTransfer.files);
+    }
+  }, [addFiles]);
+
+  // Paste handler for images
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    const items = e.clipboardData.items;
+    const imageFiles: File[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) imageFiles.push(file);
+      }
+    }
+    if (imageFiles.length > 0) {
+      addFiles(imageFiles);
+    }
+  }, [addFiles]);
+
   const handleSend = useCallback(async (text?: string) => {
     const msg = text || input.trim();
-    if (!msg || loading) return;
+    if ((!msg && attachments.length === 0) || loading) return;
 
+    const currentAttachments = [...attachments];
     setInput('');
+    setAttachments([]);
     setView('chat');
 
     // If no active chat, create one
@@ -554,10 +642,14 @@ function App() {
       apiCreateChat(newChat.id, newChat.title, newChat.createdAt / 1000).catch(() => {});
     }
 
+    const displayContent = currentAttachments.length > 0
+      ? (msg || '') + `\n[${currentAttachments.length} image${currentAttachments.length > 1 ? 's' : ''} attached]`
+      : msg;
+
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
       role: 'user',
-      content: msg,
+      content: displayContent,
       timestamp: Date.now() / 1000,
     };
 
@@ -591,7 +683,11 @@ function App() {
     const currentSessionId = chats.find((c) => c.id === chatId)?.sessionId;
 
     try {
-      const res: ChatResponse = await sendMessage(msg, currentSessionId);
+      const res: ChatResponse = await sendMessage(
+        msg || 'Please look at the attached image(s).',
+        currentSessionId,
+        currentAttachments.length > 0 ? currentAttachments : undefined,
+      );
       setContextTurns(res.context_turns ?? 0);
       if (res.max_context_turns) setMaxContextTurns(res.max_context_turns);
 
@@ -639,7 +735,7 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [input, loading, activeChatId, chats]);
+  }, [input, loading, activeChatId, chats, attachments]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -852,7 +948,17 @@ function App() {
               )}
             </div>
 
-            <div className="chat-input-area">
+            <div
+              className={`chat-input-area${isDragging ? ' dragging' : ''}`}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+            >
+              {isDragging && (
+                <div className="drop-overlay">
+                  <div className="drop-overlay-text">Drop images here</div>
+                </div>
+              )}
               {contextTurns > 0 && (
                 <div className="context-indicator" title={`${contextTurns} of ${maxContextTurns} conversation turns in context`}>
                   <div className="context-bar">
@@ -866,21 +972,63 @@ function App() {
                   </span>
                 </div>
               )}
+              {attachments.length > 0 && (
+                <div className="attachments-preview">
+                  {attachments.map((att, idx) => (
+                    <div key={idx} className="attachment-thumb">
+                      <img
+                        src={`data:${att.media_type};base64,${att.data}`}
+                        alt={att.name || 'attachment'}
+                      />
+                      <button
+                        className="attachment-remove"
+                        onClick={() => removeAttachment(idx)}
+                        title="Remove"
+                      >
+                        &times;
+                      </button>
+                      {att.name && <span className="attachment-name">{att.name}</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="chat-input-wrapper">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/gif,image/webp"
+                  multiple
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    if (e.target.files) addFiles(e.target.files);
+                    e.target.value = '';
+                  }}
+                />
+                <button
+                  className="chat-attach-btn"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={loading}
+                  title="Attach images"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+                  </svg>
+                </button>
                 <textarea
                   ref={inputRef}
                   className="chat-input"
-                  placeholder="Ask Cadence anything..."
+                  placeholder={attachments.length > 0 ? "Add a message about your images..." : "Ask Cadence anything... (paste or drop images)"}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
+                  onPaste={handlePaste}
                   rows={1}
                   disabled={loading}
                 />
                 <button
                   className="chat-send-btn"
                   onClick={() => handleSend()}
-                  disabled={!input.trim() || loading}
+                  disabled={(!input.trim() && attachments.length === 0) || loading}
                   title="Send message"
                 >
                   &#x27A4;

@@ -31,11 +31,25 @@ export interface SkillInfo {
   description: string;
 }
 
-export async function sendMessage(message: string, sessionId?: string): Promise<ChatResponse> {
+export interface ImageAttachment {
+  data: string;        // base64-encoded content
+  media_type: string;  // e.g. "image/png", "image/jpeg"
+  name?: string;       // original filename
+}
+
+export async function sendMessage(
+  message: string,
+  sessionId?: string,
+  images?: ImageAttachment[],
+): Promise<ChatResponse> {
+  const body: Record<string, unknown> = { message, session_id: sessionId };
+  if (images && images.length > 0) {
+    body.images = images.map(({ data, media_type }) => ({ data, media_type }));
+  }
   const res = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, session_id: sessionId }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`Chat request failed: ${res.status}`);
   return res.json();

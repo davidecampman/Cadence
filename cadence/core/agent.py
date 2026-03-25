@@ -125,6 +125,7 @@ class Agent:
         self,
         task: str,
         conversation_history: list[dict[str, str]] | None = None,
+        images: list[dict] | None = None,
     ) -> str:
         """Execute the agent loop on a task. Returns the final response."""
         self.trace.observation(self.id, f"Task received: {task}")
@@ -142,8 +143,23 @@ class Agent:
             role = Role.USER if entry["role"] == "user" else Role.ASSISTANT
             self._history.append(Message(role=role, content=entry["content"]))
 
-        # Add the current user message
-        self._history.append(Message(role=Role.USER, content=task))
+        # Add the current user message, with images if provided
+        if images:
+            content_blocks: list[dict] = [{"type": "text", "text": task}]
+            for img in images:
+                content_blocks.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{img['media_type']};base64,{img['data']}",
+                    },
+                })
+            self._history.append(Message(
+                role=Role.USER,
+                content=task,
+                content_blocks=content_blocks,
+            ))
+        else:
+            self._history.append(Message(role=Role.USER, content=task))
 
         max_iter = self.config.agents.max_iterations_per_task
         self._errors = []
