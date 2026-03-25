@@ -6,6 +6,8 @@ from sentinel.core.config import Config, load_config
 from sentinel.core.trace import TraceLogger
 from sentinel.agents.orchestrator import Orchestrator
 from sentinel.memory.store import MemoryStore
+from sentinel.prompts.evolution import PromptEvolver
+from sentinel.prompts.store import PromptEvolutionStore
 from sentinel.skills.loader import SkillLoader
 from sentinel.routing.router import SmartRouter
 from sentinel.tools.base import ToolRegistry
@@ -17,6 +19,12 @@ from sentinel.tools.file_ops import ListFilesTool, ReadFileTool, SearchFilesTool
 from sentinel.tools.git_ops import GitCommitTool, GitDiffTool, GitLogTool, GitStatusTool
 from sentinel.tools.http_client import HttpRequestTool
 from sentinel.tools.memory_tools import MemoryDeleteTool, MemoryQueryTool, MemorySaveTool
+from sentinel.tools.prompt_tools import (
+    PromptHistoryTool,
+    PromptModifyTool,
+    PromptRollbackTool,
+    PromptViewTool,
+)
 from sentinel.tools.scratchpad import ScratchReadTool, ScratchWriteTool
 from sentinel.tools.text_tools import DiffPatchTool, RegexReplaceTool, SummarizeTextTool
 from sentinel.tools.vision import ImageDescribeTool, ScreenshotTool
@@ -35,12 +43,27 @@ class SentinelApp:
         self.memory = MemoryStore()
         self.router = SmartRouter(self.config)
         self.skills = SkillLoader(self.config.skills.directories)
+
+        # Initialize prompt evolution system
+        if self.config.prompt_evolution.enabled:
+            self.prompt_evolution_store = PromptEvolutionStore(
+                db_path=self.config.prompt_evolution.persist_dir,
+            )
+            self.prompt_evolver = PromptEvolver(
+                store=self.prompt_evolution_store,
+                config=self.config,
+            )
+        else:
+            self.prompt_evolution_store = None
+            self.prompt_evolver = None
+
         self.tools = self._build_tool_registry()
         self.orchestrator = Orchestrator(
             tool_registry=self.tools,
             trace=self.trace,
             config=self.config,
             skill_loader=self.skills,
+            prompt_evolver=self.prompt_evolver,
         )
 
     def _build_tool_registry(self) -> ToolRegistry:
@@ -91,6 +114,13 @@ class SentinelApp:
         registry.register(MemorySaveTool(self.memory))
         registry.register(MemoryQueryTool(self.memory))
         registry.register(MemoryDeleteTool(self.memory))
+
+        # Prompt evolution (self-modifying prompts)
+        if self.prompt_evolution_store:
+            registry.register(PromptViewTool(self.prompt_evolution_store))
+            registry.register(PromptModifyTool(self.prompt_evolution_store))
+            registry.register(PromptRollbackTool(self.prompt_evolution_store))
+            registry.register(PromptHistoryTool(self.prompt_evolution_store))
 
         # Delegation
         registry.register(DelegateTool(

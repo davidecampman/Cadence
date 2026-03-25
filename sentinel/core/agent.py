@@ -17,6 +17,7 @@ from sentinel.core.types import (
     TaskStatus,
     ToolCall,
 )
+from sentinel.prompts.evolution import PromptEvolver
 from sentinel.skills.loader import SkillLoader
 from sentinel.tools.base import Tool, ToolRegistry
 
@@ -42,6 +43,7 @@ class Agent:
         parent_id: str | None = None,
         depth: int = 0,
         skill_loader: SkillLoader | None = None,
+        prompt_evolver: PromptEvolver | None = None,
     ):
         self.id = agent_id or f"{role.name}-{str(uuid.uuid4())[:6]}"
         self.role = role
@@ -51,10 +53,12 @@ class Agent:
         self.parent_id = parent_id
         self.depth = depth
         self.skill_loader = skill_loader
+        self.prompt_evolver = prompt_evolver
 
         self._history: list[Message] = []
         self._total_tokens: int = 0
         self._iterations: int = 0
+        self._errors: list[str] = []
 
     @property
     def model(self) -> str:
@@ -62,7 +66,7 @@ class Agent:
         return self.role.model_override or self.config.models.strong
 
     def _system_prompt(self) -> str:
-        """Build the system prompt for this agent, including any loaded skills."""
+        """Build the system prompt for this agent, including skills and evolved modifications."""
         tool_names = ", ".join(self.tools.names())
         prompt = (
             f"You are '{self.role.name}', an AI agent.\n"
@@ -82,6 +86,10 @@ class Agent:
             skill_prompts = self._build_skill_prompt()
             if skill_prompts:
                 prompt += f"\n## Skills\n{skill_prompts}\n"
+
+        # Apply evolved prompt modifications
+        if self.prompt_evolver and self.config.prompt_evolution.enabled:
+            prompt = self.prompt_evolver.build_evolved_prompt(self.role.name, prompt)
 
         return prompt
 
@@ -138,6 +146,7 @@ class Agent:
         self._history.append(Message(role=Role.USER, content=task))
 
         max_iter = self.config.agents.max_iterations_per_task
+        self._errors = []
 
         while self._iterations < max_iter:
             self._iterations += 1
@@ -145,16 +154,22 @@ class Agent:
             # Loop detection
             if self._check_loop_detection():
                 self.trace.error(self.id, "Loop detected — breaking out")
-                return "I appear to be stuck in a loop. Here's what I have so far:\n" + (
+                self._errors.append("Loop detected")
+                result = "I appear to be stuck in a loop. Here's what I have so far:\n" + (
                     self._last_assistant_text() or "(no output yet)"
                 )
+                await self._maybe_reflect(task, result, max_iter)
+                return result
 
             # Budget check
             if self._total_tokens >= self.config.budget.max_tokens_per_task:
                 self.trace.error(self.id, f"Token budget exceeded: {self._total_tokens}")
-                return "Token budget exceeded. Partial result:\n" + (
+                self._errors.append("Token budget exceeded")
+                result = "Token budget exceeded. Partial result:\n" + (
                     self._last_assistant_text() or "(no output yet)"
                 )
+                await self._maybe_reflect(task, result, max_iter)
+                return result
 
             # Get available tool definitions for this agent's permission tier
             tool_defs = scoped_tools.definitions(
@@ -176,6 +191,7 @@ class Agent:
             if not tool_calls:
                 self._history.append(Message(role=Role.ASSISTANT, content=text))
                 self.trace.result(self.id, f"Final response ({self._iterations} iterations)")
+                await self._maybe_reflect(task, text, max_iter)
                 return text
 
             # Record assistant message with tool calls
@@ -192,11 +208,13 @@ class Agent:
                 if tool is None:
                     result_text = f"Unknown tool: {tc.name}"
                     self.trace.error(self.id, result_text)
+                    self._errors.append(result_text)
                 else:
                     result = await tool.run(tc.id, tc.arguments)
                     result_text = result.output
                     if not result.success:
                         self.trace.error(self.id, f"Tool {tc.name} failed: {result_text[:200]}")
+                        self._errors.append(f"Tool {tc.name} failed: {result_text[:200]}")
 
                 self._history.append(Message(
                     role=Role.TOOL,
@@ -207,9 +225,42 @@ class Agent:
 
         # Hit max iterations
         self.trace.error(self.id, f"Max iterations ({max_iter}) reached")
-        return f"Reached maximum iterations ({max_iter}). Best result:\n" + (
+        self._errors.append(f"Max iterations ({max_iter}) reached")
+        result = f"Reached maximum iterations ({max_iter}). Best result:\n" + (
             self._last_assistant_text() or "(no output)"
         )
+        await self._maybe_reflect(task, result, max_iter)
+        return result
+
+    async def _maybe_reflect(self, task: str, result: str, max_iter: int) -> None:
+        """Trigger prompt self-reflection if evolution is enabled."""
+        if not self.prompt_evolver:
+            return
+        if not self.config.prompt_evolution.enabled:
+            return
+        if not self.config.prompt_evolution.reflect_after_task:
+            return
+
+        try:
+            modifications = await self.prompt_evolver.reflect_and_evolve(
+                role_name=self.role.name,
+                task_description=task[:500],
+                task_result=result,
+                iterations_used=self._iterations,
+                max_iterations=max_iter,
+                errors=self._errors if self._errors else None,
+            )
+            if modifications:
+                mod_summary = ", ".join(
+                    f"v{m.version}({m.modification_type.value})" for m in modifications
+                )
+                self.trace.thought(
+                    self.id,
+                    f"Prompt self-reflection added {len(modifications)} modification(s): {mod_summary}",
+                )
+        except Exception as e:
+            # Reflection failures should never break task execution
+            self.trace.error(self.id, f"Prompt reflection failed (non-fatal): {e}")
 
     def _last_assistant_text(self) -> str | None:
         for msg in reversed(self._history):

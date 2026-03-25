@@ -84,6 +84,14 @@ class LoggingConfig(BaseModel):
     rich_console: bool = True
 
 
+class PromptEvolutionConfig(BaseModel):
+    """Settings for self-modifying prompt evolution."""
+    enabled: bool = True                  # Master switch for prompt evolution
+    reflect_after_task: bool = True       # Trigger reflection after each task
+    max_active_modifications: int = 10    # Cap active modifications per role
+    persist_dir: str = "./data/prompt_evolution.db"  # SQLite database path
+
+
 class Config(BaseModel):
     models: ModelsConfig = Field(default_factory=ModelsConfig)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
@@ -93,6 +101,7 @@ class Config(BaseModel):
     conversation: ConversationConfig = Field(default_factory=ConversationConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    prompt_evolution: PromptEvolutionConfig = Field(default_factory=PromptEvolutionConfig)
 
 
 def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:

@@ -17,6 +17,8 @@ from sentinel.core.types import (
     Task,
     TaskStatus,
 )
+from sentinel.prompts.evolution import PromptEvolver
+from sentinel.prompts.store import PromptEvolutionStore
 from sentinel.skills.loader import SkillLoader
 from sentinel.tools.base import ToolRegistry
 
@@ -130,6 +132,7 @@ class Orchestrator:
         trace: TraceLogger,
         config: Config | None = None,
         skill_loader: SkillLoader | None = None,
+        prompt_evolver: PromptEvolver | None = None,
     ):
         self.tools = tool_registry
         self.trace = trace
@@ -137,6 +140,15 @@ class Orchestrator:
         self.skill_loader = skill_loader
         self.dag = TaskDAG()
         self._session_tokens: int = 0
+
+        # Initialize prompt evolver if evolution is enabled
+        if prompt_evolver:
+            self.prompt_evolver = prompt_evolver
+        elif self.config.prompt_evolution.enabled:
+            store = PromptEvolutionStore(db_path=self.config.prompt_evolution.persist_dir)
+            self.prompt_evolver = PromptEvolver(store=store, config=self.config)
+        else:
+            self.prompt_evolver = None
 
     @property
     def session_tokens(self) -> int:
@@ -403,4 +415,5 @@ class Orchestrator:
             trace=self.trace,
             config=self.config,
             skill_loader=self.skill_loader,
+            prompt_evolver=self.prompt_evolver,
         )
