@@ -2,13 +2,49 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
+import socket
+import urllib.parse
 import urllib.request
 import urllib.error
 from html.parser import HTMLParser
 
 from cadence.core.types import PermissionTier
 from cadence.tools.base import Tool
+
+
+def _validate_url(url: str) -> str | None:
+    """Validate a URL is safe to fetch. Returns error message or None if safe."""
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return "Invalid URL"
+
+    if parsed.scheme not in ("http", "https"):
+        return f"Unsupported scheme: {parsed.scheme!r}. Only http/https allowed."
+
+    hostname = parsed.hostname
+    if not hostname:
+        return "Missing hostname in URL"
+
+    # Block private/internal IPs
+    try:
+        addr = ipaddress.ip_address(hostname)
+        if addr.is_private or addr.is_loopback or addr.is_reserved or addr.is_link_local:
+            return f"Blocked: {hostname} is a private/reserved address"
+    except ValueError:
+        # hostname is a DNS name, resolve it
+        try:
+            resolved = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+            for _, _, _, _, sockaddr in resolved:
+                addr = ipaddress.ip_address(sockaddr[0])
+                if addr.is_private or addr.is_loopback or addr.is_reserved or addr.is_link_local:
+                    return f"Blocked: {hostname} resolves to private address {sockaddr[0]}"
+        except socket.gaierror:
+            pass  # DNS resolution failure will be caught by the actual fetch
+
+    return None
 
 
 class _TextExtractor(HTMLParser):
@@ -58,6 +94,10 @@ class WebFetchTool(Tool):
     permission_tier = PermissionTier.PRIVILEGED
 
     async def execute(self, url: str, max_chars: int = 20000) -> str:
+        validation_error = _validate_url(url)
+        if validation_error:
+            return f"URL validation failed: {validation_error}"
+
         req = urllib.request.Request(url, headers={"User-Agent": "Cadence/0.1"})
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:

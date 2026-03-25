@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import socket
 import urllib.error
 import urllib.request
 
 from cadence.core.types import PermissionTier
 from cadence.tools.base import Tool
+from cadence.tools.web import _validate_url
 
 
 class HttpRequestTool(Tool):
@@ -61,6 +63,10 @@ class HttpRequestTool(Tool):
         timeout: int = 30,
         max_response_chars: int = 20000,
     ) -> str:
+        validation_error = _validate_url(url)
+        if validation_error:
+            return f"URL validation failed: {validation_error}"
+
         headers = headers or {}
         if "User-Agent" not in headers:
             headers["User-Agent"] = "Cadence/0.1"
@@ -82,6 +88,8 @@ class HttpRequestTool(Tool):
             raw = e.read().decode(errors="replace")
         except urllib.error.URLError as e:
             return f"Request failed: {e}"
+        except socket.timeout:
+            return f"Request timed out after {timeout} seconds"
 
         # Try to pretty-print JSON responses
         content_type = resp_headers.get("Content-Type", "")

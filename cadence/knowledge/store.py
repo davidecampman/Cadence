@@ -111,17 +111,16 @@ class KnowledgeStore:
                 break
 
             # Try to break at paragraph boundary
-                # Look for a paragraph break near the end
-                para_break = text.rfind("\n\n", start + chunk_size // 2, end)
-                if para_break != -1:
-                    end = para_break + 2
-                else:
-                    # Try sentence boundary (period followed by space or newline)
-                    for sep in (". ", ".\n", "? ", "!\n", "! ", "?\n"):
-                        sent_break = text.rfind(sep, start + chunk_size // 2, end)
-                        if sent_break != -1:
-                            end = sent_break + len(sep)
-                            break
+            para_break = text.rfind("\n\n", start + chunk_size // 2, end)
+            if para_break != -1:
+                end = para_break + 2
+            else:
+                # Try sentence boundary (period followed by space or newline)
+                for sep in (". ", ".\n", "? ", "!\n", "! ", "?\n"):
+                    sent_break = text.rfind(sep, start + chunk_size // 2, end)
+                    if sent_break != -1:
+                        end = sent_break + len(sep)
+                        break
 
             chunk = text[start:end].strip()
             if chunk:

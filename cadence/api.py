@@ -39,14 +39,17 @@ from cadence.storage.chat_store import ChatStore, ChatMessageRecord
 
 app = FastAPI(title="Cadence", version="0.1.0")
 
+_default_origins = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+]
+_cors_origins = os.environ.get("CADENCE_CORS_ORIGINS", "").split(",") if os.environ.get("CADENCE_CORS_ORIGINS") else _default_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=[o.strip() for o in _cors_origins if o.strip()],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -233,7 +236,7 @@ async def chat(req: ChatRequest):
         response = await agent_app.run(req.message, conversation_history=history)
     except Exception as e:
         err_str = str(e)
-        if "AuthenticationError" in type(e).__name__ or "Missing" in err_str and "API Key" in err_str:
+        if "AuthenticationError" in type(e).__name__ or ("Missing" in err_str and "API Key" in err_str):
             # Provide a helpful hint about configuring API keys
             model_strong = agent_app.config.models.strong
             model_fast = agent_app.config.models.fast
