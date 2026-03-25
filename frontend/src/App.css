@@ -633,6 +633,47 @@ body.light-mode .file-link-group {
 }
 
 /* ═══════════════════════════════════════════════
+   ATTACHMENT DOWNLOAD BUTTONS
+   ═══════════════════════════════════════════════ */
+.message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+  padding-left: 44px;
+}
+
+.attachment-download-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  background: rgba(45, 212, 191, 0.10);
+  color: var(--accent);
+  border: 1px solid rgba(45, 212, 191, 0.25);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.attachment-download-btn:hover {
+  background: rgba(45, 212, 191, 0.25);
+  border-color: var(--accent);
+}
+
+body.light-mode .attachment-download-btn {
+  background: rgba(45, 212, 191, 0.12);
+  border-color: rgba(45, 212, 191, 0.30);
+}
+
+body.light-mode .attachment-download-btn:hover {
+  background: rgba(45, 212, 191, 0.25);
+}
+
+/* ═══════════════════════════════════════════════
    TYPING INDICATOR
    ═══════════════════════════════════════════════ */
 .typing-indicator {
