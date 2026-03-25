@@ -3,23 +3,31 @@
 from __future__ import annotations
 
 from sentinel.core.config import Config, load_config
+from sentinel.core.checkpoint import CheckpointManager
+from sentinel.core.message_bus import MessageBus
 from sentinel.core.trace import TraceLogger
 from sentinel.agents.orchestrator import Orchestrator
+from sentinel.knowledge.graph import KnowledgeGraph
 from sentinel.knowledge.store import KnowledgeStore
+from sentinel.learning.store import LearningStore
 from sentinel.memory.store import MemoryStore
 from sentinel.prompts.evolution import PromptEvolver
 from sentinel.prompts.store import PromptEvolutionStore
 from sentinel.skills.loader import SkillLoader
 from sentinel.routing.router import SmartRouter
 from sentinel.tools.base import ToolRegistry
+from sentinel.tools.checkpoint_tools import RequestApprovalTool
 from sentinel.tools.code_execution import CodeExecutionTool, ShellTool
 from sentinel.tools.database import SqlQueryTool
 from sentinel.tools.delegate import DelegateTool
 from sentinel.tools.environment import CheckDependencyTool, EnvInfoTool, InstallPackageTool
 from sentinel.tools.file_ops import ListFilesTool, ReadFileTool, SearchFilesTool, WriteFileTool
 from sentinel.tools.git_ops import GitCommitTool, GitDiffTool, GitLogTool, GitStatusTool
+from sentinel.tools.graph_tools import GraphAddEntityTool, GraphAddRelationTool, GraphQueryTool
 from sentinel.tools.http_client import HttpRequestTool
+from sentinel.tools.learning_tools import LearningInsightsTool, LearningStatsTool
 from sentinel.tools.memory_tools import MemoryDeleteTool, MemoryQueryTool, MemorySaveTool
+from sentinel.tools.message_bus_tools import BusPeekTool, BusPublishTool
 from sentinel.tools.prompt_tools import (
     PromptHistoryTool,
     PromptModifyTool,
@@ -67,6 +75,24 @@ class SentinelApp:
             self.prompt_evolution_store = None
             self.prompt_evolver = None
 
+        # Initialize message bus
+        self.message_bus = MessageBus(
+            history_limit=self.config.message_bus.history_limit,
+        ) if self.config.message_bus.enabled else None
+
+        # Initialize checkpoint manager
+        self.checkpoint_manager = CheckpointManager() if self.config.checkpoints.enabled else None
+
+        # Initialize cross-session learning
+        self.learning_store = LearningStore(
+            db_path=self.config.learning.persist_dir,
+        ) if self.config.learning.enabled else None
+
+        # Initialize knowledge graph
+        self.knowledge_graph = KnowledgeGraph(
+            persist_path=self.config.knowledge_graph.persist_path,
+        ) if self.config.knowledge_graph.enabled else None
+
         self.tools = self._build_tool_registry()
         self.orchestrator = Orchestrator(
             tool_registry=self.tools,
@@ -74,6 +100,9 @@ class SentinelApp:
             config=self.config,
             skill_loader=self.skills,
             prompt_evolver=self.prompt_evolver,
+            message_bus=self.message_bus,
+            checkpoint_manager=self.checkpoint_manager,
+            learning_store=self.learning_store,
         )
 
     def _build_tool_registry(self) -> ToolRegistry:
@@ -144,6 +173,26 @@ class SentinelApp:
             registry.register(PromptModifyTool(self.prompt_evolution_store))
             registry.register(PromptRollbackTool(self.prompt_evolution_store))
             registry.register(PromptHistoryTool(self.prompt_evolution_store))
+
+        # Message bus (inter-agent communication)
+        if self.message_bus:
+            registry.register(BusPublishTool(self.message_bus))
+            registry.register(BusPeekTool(self.message_bus))
+
+        # Checkpoints (human-in-the-loop)
+        if self.checkpoint_manager:
+            registry.register(RequestApprovalTool(self.checkpoint_manager))
+
+        # Knowledge graph
+        if self.knowledge_graph:
+            registry.register(GraphAddEntityTool(self.knowledge_graph))
+            registry.register(GraphAddRelationTool(self.knowledge_graph))
+            registry.register(GraphQueryTool(self.knowledge_graph))
+
+        # Cross-session learning
+        if self.learning_store:
+            registry.register(LearningInsightsTool(self.learning_store))
+            registry.register(LearningStatsTool(self.learning_store))
 
         # Delegation
         registry.register(DelegateTool(

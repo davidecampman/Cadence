@@ -81,6 +81,28 @@ prompt_evolution:
   max_active_modifications: 10        # Cap active modifications per role
   persist_dir: "./data/prompt_evolution.db"  # SQLite database for modifications
 
+message_bus:
+  enabled: true                       # Inter-agent pub/sub communication
+  history_limit: 100                  # Max messages retained per topic
+
+checkpoints:
+  enabled: true                       # Human-in-the-loop approval system
+  default_timeout: 300.0              # Default timeout in seconds (5 min)
+  auto_approve_read_only: true        # Auto-approve read-only operations
+
+learning:
+  enabled: true                       # Cross-session learning
+  persist_dir: "./data/learning.db"   # SQLite database for learning data
+
+knowledge_graph:
+  enabled: true                       # Structured knowledge graph
+  persist_path: "./data/knowledge_graph.json"  # JSON persistence file
+
+multimodal:
+  enabled: true                       # Multi-modal (image) input support
+  max_image_size_mb: 10.0             # Max image size in MB
+  max_images_per_message: 5           # Max images per chat message
+
 logging:
   level: "INFO"                     # DEBUG | INFO | WARNING | ERROR
   trace_file: "./data/traces.jsonl" # Structured reasoning trace output

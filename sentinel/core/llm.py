@@ -62,10 +62,19 @@ def _configure_bedrock_from_env() -> dict[str, Any]:
 
 
 def _messages_to_dicts(messages: list[Message]) -> list[dict[str, Any]]:
-    """Convert our Message objects to the format LiteLLM expects."""
+    """Convert our Message objects to the format LiteLLM expects.
+
+    Handles both text-only and multi-modal (text + images) content.
+    """
     result = []
     for msg in messages:
-        d: dict[str, Any] = {"role": msg.role.value, "content": msg.content}
+        # Support multi-modal content: if content is a list, it contains
+        # content blocks (text + images); otherwise it's a plain string.
+        content = msg.content
+        if hasattr(msg, "content_blocks") and msg.content_blocks:
+            content = msg.content_blocks
+
+        d: dict[str, Any] = {"role": msg.role.value, "content": content}
         if msg.name:
             d["name"] = msg.name
         if msg.tool_call_id:

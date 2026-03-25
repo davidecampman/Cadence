@@ -92,6 +92,38 @@ class PromptEvolutionConfig(BaseModel):
     persist_dir: str = "./data/prompt_evolution.db"  # SQLite database path
 
 
+class MessageBusConfig(BaseModel):
+    """Settings for the inter-agent message bus."""
+    enabled: bool = True
+    history_limit: int = 100              # Max messages per topic
+
+
+class CheckpointConfig(BaseModel):
+    """Settings for human-in-the-loop checkpoints."""
+    enabled: bool = True
+    default_timeout: float = 300.0        # Default timeout in seconds (5 min)
+    auto_approve_read_only: bool = True   # Auto-approve read-only operations
+
+
+class LearningConfig(BaseModel):
+    """Settings for cross-session learning."""
+    enabled: bool = True
+    persist_dir: str = "./data/learning.db"
+
+
+class KnowledgeGraphConfig(BaseModel):
+    """Settings for the structured knowledge graph."""
+    enabled: bool = True
+    persist_path: str = "./data/knowledge_graph.json"
+
+
+class MultiModalConfig(BaseModel):
+    """Settings for multi-modal (image) input."""
+    enabled: bool = True
+    max_image_size_mb: float = 10.0       # Max image size in MB
+    max_images_per_message: int = 5       # Max images per chat message
+
+
 class Config(BaseModel):
     models: ModelsConfig = Field(default_factory=ModelsConfig)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
@@ -102,6 +134,11 @@ class Config(BaseModel):
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     prompt_evolution: PromptEvolutionConfig = Field(default_factory=PromptEvolutionConfig)
+    message_bus: MessageBusConfig = Field(default_factory=MessageBusConfig)
+    checkpoints: CheckpointConfig = Field(default_factory=CheckpointConfig)
+    learning: LearningConfig = Field(default_factory=LearningConfig)
+    knowledge_graph: KnowledgeGraphConfig = Field(default_factory=KnowledgeGraphConfig)
+    multimodal: MultiModalConfig = Field(default_factory=MultiModalConfig)
 
 
 def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:

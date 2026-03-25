@@ -20,9 +20,14 @@ class Role(str, Enum):
 
 
 class Message(BaseModel):
-    """A single message in the conversation history."""
+    """A single message in the conversation history.
+
+    For multi-modal messages, ``content_blocks`` holds a list of content
+    blocks (text + images) while ``content`` remains a plain-text fallback.
+    """
     role: Role
     content: str
+    content_blocks: list[dict[str, Any]] | None = None  # Multi-modal content blocks
     name: str | None = None
     tool_call_id: str | None = None
     tool_calls: list[ToolCall] | None = None
