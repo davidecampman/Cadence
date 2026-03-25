@@ -11,15 +11,15 @@ import tempfile
 import pytest
 import pytest_asyncio
 
-from sentinel.knowledge.store import KnowledgeStore, DocumentRecord, ChunkRecord
-from sentinel.knowledge.parsers import (
+from cadence.knowledge.store import KnowledgeStore, DocumentRecord, ChunkRecord
+from cadence.knowledge.parsers import (
     detect_source_type,
     parse_email_content,
     parse_text_file,
     parse_web_page,
     PARSERS,
 )
-from sentinel.tools.knowledge_tools import (
+from cadence.tools.knowledge_tools import (
     KBIngestTool,
     KBSearchTool,
     KBListTool,
@@ -35,7 +35,7 @@ from sentinel.tools.knowledge_tools import (
 def kb_store(tmp_path, monkeypatch):
     """Provide a KnowledgeStore backed by a temp directory."""
     monkeypatch.setattr(
-        "sentinel.knowledge.store.get_config",
+        "cadence.knowledge.store.get_config",
         lambda: _make_config(tmp_path),
     )
     return KnowledgeStore()
@@ -243,7 +243,7 @@ class TestPDFParsing:
     def test_pdf_from_bytes(self):
         pdf_bytes = _make_sample_pdf()
         try:
-            from sentinel.knowledge.parsers import parse_pdf
+            from cadence.knowledge.parsers import parse_pdf
         except ImportError:
             pytest.skip("pypdf not installed")
 
@@ -259,7 +259,7 @@ class TestPDFParsing:
         pdf_file.write_bytes(pdf_bytes)
 
         try:
-            from sentinel.knowledge.parsers import parse_pdf
+            from cadence.knowledge.parsers import parse_pdf
         except ImportError:
             pytest.skip("pypdf not installed")
 
@@ -275,7 +275,7 @@ class TestDOCXParsing:
     def test_docx_from_bytes(self):
         docx_bytes = _make_sample_docx()
         try:
-            from sentinel.knowledge.parsers import parse_docx
+            from cadence.knowledge.parsers import parse_docx
         except ImportError:
             pytest.skip("python-docx not installed")
 
@@ -291,7 +291,7 @@ class TestDOCXParsing:
         docx_file.write_bytes(docx_bytes)
 
         try:
-            from sentinel.knowledge.parsers import parse_docx
+            from cadence.knowledge.parsers import parse_docx
         except ImportError:
             pytest.skip("python-docx not installed")
 
@@ -734,19 +734,19 @@ class TestKBAPIEndpoints:
     def client(self, tmp_path, monkeypatch):
         """Create a test client with an isolated KB store."""
         monkeypatch.setattr(
-            "sentinel.knowledge.store.get_config",
+            "cadence.knowledge.store.get_config",
             lambda: _make_config(tmp_path),
         )
         # Reset the global KB store so it picks up our monkeypatched config
-        import sentinel.api as api_module
+        import cadence.api as api_module
         api_module._kb_store = None
         monkeypatch.setattr(
-            "sentinel.api.get_kb_store",
+            "cadence.api.get_kb_store",
             lambda: KnowledgeStore(),
         )
 
         from fastapi.testclient import TestClient
-        from sentinel.api import app
+        from cadence.api import app
 
         return TestClient(app, raise_server_exceptions=False)
 
@@ -754,16 +754,16 @@ class TestKBAPIEndpoints:
     def client_with_store(self, tmp_path, monkeypatch):
         """Create a test client with a shared KB store for state across requests."""
         monkeypatch.setattr(
-            "sentinel.knowledge.store.get_config",
+            "cadence.knowledge.store.get_config",
             lambda: _make_config(tmp_path),
         )
         store = KnowledgeStore()
-        import sentinel.api as api_module
+        import cadence.api as api_module
         api_module._kb_store = None
-        monkeypatch.setattr("sentinel.api.get_kb_store", lambda: store)
+        monkeypatch.setattr("cadence.api.get_kb_store", lambda: store)
 
         from fastapi.testclient import TestClient
-        from sentinel.api import app
+        from cadence.api import app
 
         return TestClient(app, raise_server_exceptions=False)
 

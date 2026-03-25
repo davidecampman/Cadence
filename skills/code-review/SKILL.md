@@ -2,7 +2,7 @@
 name: code-review
 version: 1.0.0
 description: Review code for bugs, security issues, and style improvements
-author: sentinel
+author: cadence
 dependencies: []
 tags:
   - code

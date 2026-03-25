@@ -5,10 +5,10 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-import sentinel.api as api_module
-from sentinel.api import app, _broadcast_trace
-from sentinel.core.types import TraceStep
-from sentinel.storage.chat_store import ChatStore
+import cadence.api as api_module
+from cadence.api import app, _broadcast_trace
+from cadence.core.types import TraceStep
+from cadence.storage.chat_store import ChatStore
 
 
 # ---------------------------------------------------------------------------

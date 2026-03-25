@@ -6,14 +6,14 @@ import platform
 
 import pytest
 
-from sentinel.core.types import PermissionTier
-from sentinel.tools.file_ops import (
+from cadence.core.types import PermissionTier
+from cadence.tools.file_ops import (
     ListFilesTool,
     ReadFileTool,
     SearchFilesTool,
     WriteFileTool,
 )
-from sentinel.tools.code_execution import (
+from cadence.tools.code_execution import (
     CodeExecutionTool,
     ShellTool,
     _build_resource_limits,
@@ -21,7 +21,7 @@ from sentinel.tools.code_execution import (
     _shell_quote,
     _wrap_with_sandbox,
 )
-from sentinel.tools.base import Tool, ToolRegistry
+from cadence.tools.base import Tool, ToolRegistry
 
 
 # ---------------------------------------------------------------------------

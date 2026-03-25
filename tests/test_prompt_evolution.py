@@ -2,14 +2,14 @@
 
 import pytest
 
-from sentinel.core.config import Config, PromptEvolutionConfig
-from sentinel.prompts.store import (
+from cadence.core.config import Config, PromptEvolutionConfig
+from cadence.prompts.store import (
     ModificationType,
     PromptEvolutionStore,
     PromptModification,
 )
-from sentinel.prompts.evolution import PromptEvolver
-from sentinel.tools.prompt_tools import (
+from cadence.prompts.evolution import PromptEvolver
+from cadence.tools.prompt_tools import (
     PromptHistoryTool,
     PromptModifyTool,
     PromptRollbackTool,

@@ -35,5 +35,5 @@ if lsof -ti :8000 >/dev/null 2>&1; then
 fi
 
 # Start the server
-echo ">> Starting Sentinel server..."
-exec python -m sentinel.server "$@"
+echo ">> Starting Cadence server..."
+exec python -m cadence.server "$@"

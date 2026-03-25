@@ -6,10 +6,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from sentinel.core.agent import Agent, _summarize_args
-from sentinel.core.config import Config
-from sentinel.core.trace import TraceLogger
-from sentinel.core.types import (
+from cadence.core.agent import Agent, _summarize_args
+from cadence.core.config import Config
+from cadence.core.trace import TraceLogger
+from cadence.core.types import (
     AgentRole,
     Message,
     PermissionTier,
@@ -18,8 +18,8 @@ from sentinel.core.types import (
     TaskStatus,
     ToolCall,
 )
-from sentinel.tools.base import Tool, ToolRegistry
-from sentinel.agents.orchestrator import Orchestrator, TaskDAG, ROLES
+from cadence.tools.base import Tool, ToolRegistry
+from cadence.agents.orchestrator import Orchestrator, TaskDAG, ROLES
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +194,7 @@ class TestAgentLoop:
         """When LLM returns text with no tool calls, agent returns it directly."""
         mock_response = ("The answer is 42.", [], {"total_tokens": 10})
 
-        with patch("sentinel.core.agent.chat_completion", new_callable=AsyncMock) as mock_llm:
+        with patch("cadence.core.agent.chat_completion", new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = mock_response
 
             role = AgentRole(name="test", description="Test agent")
@@ -229,7 +229,7 @@ class TestAgentLoop:
                 # Second call: LLM gives final answer after seeing tool result
                 return ("The echo said: ECHO: hello", [], {"total_tokens": 15})
 
-        with patch("sentinel.core.agent.chat_completion", side_effect=mock_chat):
+        with patch("cadence.core.agent.chat_completion", side_effect=mock_chat):
             role = AgentRole(name="test", description="Test agent")
             trace = TraceLogger(console=False)
             config = _make_config()
@@ -257,7 +257,7 @@ class TestAgentLoop:
             else:
                 return ("Sorry, that tool doesn't exist.", [], {"total_tokens": 10})
 
-        with patch("sentinel.core.agent.chat_completion", side_effect=mock_chat):
+        with patch("cadence.core.agent.chat_completion", side_effect=mock_chat):
             role = AgentRole(name="test", description="Test agent")
             trace = TraceLogger(console=False)
             config = _make_config()
@@ -278,7 +278,7 @@ class TestAgentLoop:
         async def mock_chat(*args, **kwargs):
             return ("", [tc], {"total_tokens": 5})
 
-        with patch("sentinel.core.agent.chat_completion", side_effect=mock_chat):
+        with patch("cadence.core.agent.chat_completion", side_effect=mock_chat):
             role = AgentRole(name="test", description="Test agent")
             trace = TraceLogger(console=False)
             config = _make_config()
@@ -304,7 +304,7 @@ class TestAgentLoop:
         tool = EchoTool()
         registry = _make_registry(tool)
 
-        with patch("sentinel.core.agent.chat_completion", side_effect=mock_chat):
+        with patch("cadence.core.agent.chat_completion", side_effect=mock_chat):
             role = AgentRole(name="test", description="Test agent")
             trace = TraceLogger(console=False)
             config = _make_config()
@@ -327,7 +327,7 @@ class TestAgentLoop:
             # Always return the same text to trigger loop detection
             return ("I am stuck repeating myself.", [], {"total_tokens": 10})
 
-        with patch("sentinel.core.agent.chat_completion", side_effect=mock_chat):
+        with patch("cadence.core.agent.chat_completion", side_effect=mock_chat):
             role = AgentRole(name="test", description="Test agent")
             trace = TraceLogger(console=False)
             config = _make_config()
@@ -350,7 +350,7 @@ class TestAgentLoop:
             captured_messages.extend(messages)
             return ("Got the context.", [], {"total_tokens": 10})
 
-        with patch("sentinel.core.agent.chat_completion", side_effect=mock_chat):
+        with patch("cadence.core.agent.chat_completion", side_effect=mock_chat):
             role = AgentRole(name="test", description="Test agent")
             trace = TraceLogger(console=False)
             registry = _make_registry()
@@ -415,8 +415,8 @@ class TestOrchestrator:
                 # Evaluation phase
                 return ("PASS", [], {"total_tokens": 5})
 
-        with patch("sentinel.core.agent.chat_completion", side_effect=mock_chat), \
-             patch("sentinel.agents.orchestrator.chat_completion", side_effect=mock_chat):
+        with patch("cadence.core.agent.chat_completion", side_effect=mock_chat), \
+             patch("cadence.agents.orchestrator.chat_completion", side_effect=mock_chat):
             trace = TraceLogger(console=False)
             registry = _make_registry()
             config = _make_config()
@@ -457,8 +457,8 @@ class TestOrchestrator:
                 # Evaluation phase
                 return ("PASS", [], {"total_tokens": 5})
 
-        with patch("sentinel.core.agent.chat_completion", side_effect=mock_chat), \
-             patch("sentinel.agents.orchestrator.chat_completion", side_effect=mock_chat):
+        with patch("cadence.core.agent.chat_completion", side_effect=mock_chat), \
+             patch("cadence.agents.orchestrator.chat_completion", side_effect=mock_chat):
             trace = TraceLogger(console=False)
             registry = _make_registry()
             config = _make_config()
@@ -532,7 +532,7 @@ class TestOrchestrator:
         async def mock_chat(model, messages, **kwargs):
             return ("PASS", [], {"total_tokens": 5})
 
-        with patch("sentinel.agents.orchestrator.chat_completion", side_effect=mock_chat):
+        with patch("cadence.agents.orchestrator.chat_completion", side_effect=mock_chat):
             trace = TraceLogger(console=False)
             registry = _make_registry()
             config = _make_config()
@@ -548,7 +548,7 @@ class TestOrchestrator:
         async def mock_chat(model, messages, **kwargs):
             return ("FAIL: Missing explanation of Y.", [], {"total_tokens": 5})
 
-        with patch("sentinel.agents.orchestrator.chat_completion", side_effect=mock_chat):
+        with patch("cadence.agents.orchestrator.chat_completion", side_effect=mock_chat):
             trace = TraceLogger(console=False)
             registry = _make_registry()
             config = _make_config()
