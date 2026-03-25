@@ -44,6 +44,7 @@ interface ChatMessage {
   timestamp: number;
   duration_ms?: number;
   trace_steps?: TraceStep[];
+  attachments?: ImageAttachment[];
 }
 
 interface Chat {
@@ -660,6 +661,7 @@ function App() {
       role: 'user',
       content: displayContent,
       timestamp: Date.now() / 1000,
+      attachments: currentAttachments.length > 0 ? [...currentAttachments] : undefined,
     };
 
     // Add user message and update title if first message
@@ -910,6 +912,30 @@ function App() {
                         <span className="message-time">{formatTime(msg.timestamp)}</span>
                       </div>
                       <div className={`message-body ${msg.role}`}>{renderMessageContent(msg.content, msg.role)}</div>
+                      {msg.attachments && msg.attachments.length > 0 && (
+                        <div className="message-attachments">
+                          {msg.attachments.map((att, idx) => {
+                            const fileName = att.name || `attachment-${idx + 1}`;
+                            const dataUrl = `data:${att.media_type};base64,${att.data}`;
+                            return (
+                              <a
+                                key={idx}
+                                href={dataUrl}
+                                download={fileName}
+                                className="attachment-download-btn"
+                                title={`Download ${fileName}`}
+                              >
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                                  <polyline points="7 10 12 15 17 10" />
+                                  <line x1="12" y1="15" x2="12" y2="3" />
+                                </svg>
+                                {fileName}
+                              </a>
+                            );
+                          })}
+                        </div>
+                      )}
                       {msg.duration_ms && (
                         <div className="message-duration">
                           Completed in {(msg.duration_ms / 1000).toFixed(1)}s
