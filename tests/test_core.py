@@ -419,3 +419,127 @@ def test_skill_uninstall_not_found(tmp_path):
     loader = SkillLoader(directories=[str(tmp_path)])
     loader.discover()
     assert loader.uninstall("ghost-skill") is False
+
+
+# --- Skill Compatibility ---
+
+def test_skill_frontmatter_only(tmp_path):
+    """SKILL.md with frontmatter but no body should parse metadata correctly."""
+    skill_dir = tmp_path / "meta-only"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("---\nname: meta-only\nversion: 1.0.0\ndescription: Metadata only\n---\n")
+
+    loader = SkillLoader(directories=[str(tmp_path)])
+    skills = loader.discover()
+    assert len(skills) == 1
+    skill = skills[0]
+    assert skill.name == "meta-only"
+    assert skill.version == "1.0.0"
+    assert skill.description == "Metadata only"
+    assert skill.instructions == ""
+
+
+def test_skill_frontmatter_empty_body(tmp_path):
+    """SKILL.md with frontmatter and whitespace-only body should parse metadata."""
+    skill_dir = tmp_path / "empty-body"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("---\nname: empty-body\nversion: 2.0.0\n---\n\n   \n")
+
+    loader = SkillLoader(directories=[str(tmp_path)])
+    skills = loader.discover()
+    assert len(skills) == 1
+    assert skills[0].name == "empty-body"
+    assert skills[0].version == "2.0.0"
+
+
+def test_skill_resolve_dependencies(tmp_path):
+    """Dependency resolution returns skills in topological order."""
+    for name, deps in [("base", []), ("mid", ["base"]), ("top", ["mid"])]:
+        d = tmp_path / name
+        d.mkdir()
+        dep_yaml = "\n  - ".join([""] + deps) if deps else " []"
+        (d / "SKILL.md").write_text(
+            f"---\nname: {name}\nversion: 1.0.0\ndependencies:{dep_yaml}\n---\nInstructions for {name}\n"
+        )
+
+    loader = SkillLoader(directories=[str(tmp_path)])
+    loader.discover()
+    resolved = loader.resolve_dependencies("top")
+    names = [s.name for s in resolved]
+    assert names == ["base", "mid", "top"]
+
+
+def test_skill_resolve_missing_dependency(tmp_path):
+    """Missing dependencies are skipped with a warning, available skills still resolve."""
+    d = tmp_path / "orphan"
+    d.mkdir()
+    (d / "SKILL.md").write_text("---\nname: orphan\nversion: 1.0.0\ndependencies:\n  - nonexistent\n---\nContent\n")
+
+    loader = SkillLoader(directories=[str(tmp_path)])
+    loader.discover()
+    resolved = loader.resolve_dependencies("orphan")
+    assert len(resolved) == 1
+    assert resolved[0].name == "orphan"
+
+
+def test_skill_resolve_circular_dependency(tmp_path):
+    """Circular dependencies don't cause infinite loops."""
+    for name, dep in [("alpha", "beta"), ("beta", "alpha")]:
+        d = tmp_path / name
+        d.mkdir()
+        (d / "SKILL.md").write_text(
+            f"---\nname: {name}\nversion: 1.0.0\ndependencies:\n  - {dep}\n---\nContent\n"
+        )
+
+    loader = SkillLoader(directories=[str(tmp_path)])
+    loader.discover()
+    resolved = loader.resolve_dependencies("alpha")
+    names = [s.name for s in resolved]
+    # Both should be present, no infinite loop
+    assert "alpha" in names
+    assert "beta" in names
+
+
+def test_skill_get_skill_prompt(tmp_path):
+    """get_skill_prompt returns formatted prompt with dependency chain."""
+    for name, deps in [("dep", []), ("main", ["dep"])]:
+        d = tmp_path / name
+        d.mkdir()
+        dep_yaml = "\n  - ".join([""] + deps) if deps else " []"
+        (d / "SKILL.md").write_text(
+            f"---\nname: {name}\nversion: 1.0.0\ndependencies:{dep_yaml}\n---\nDo {name} things.\n"
+        )
+
+    loader = SkillLoader(directories=[str(tmp_path)])
+    loader.discover()
+    prompt = loader.get_skill_prompt("main")
+    assert prompt is not None
+    assert "## Skill: dep (v1.0.0)" in prompt
+    assert "## Skill: main (v1.0.0)" in prompt
+    # dep should appear before main
+    assert prompt.index("dep") < prompt.index("main")
+
+
+def test_skill_get_skill_prompt_nonexistent(tmp_path):
+    """get_skill_prompt returns None for unknown skills."""
+    loader = SkillLoader(directories=[str(tmp_path)])
+    loader.discover()
+    assert loader.get_skill_prompt("nope") is None
+
+
+def test_skill_zip_path_traversal(tmp_path):
+    """Zip entries with path traversal are rejected."""
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("evil/SKILL.md", "---\nname: evil\nversion: 1.0.0\n---\nContent\n")
+        zf.writestr("evil/../../../etc/passwd", "root:x:0:0")
+
+    loader = SkillLoader(directories=[str(tmp_path)])
+    loader.discover()
+    skill = loader.install_from_zip(buf.getvalue())
+    assert skill.name == "evil"
+    # The traversal file should NOT have been written outside the skill folder
+    assert not (tmp_path / ".." / ".." / "etc" / "passwd").exists()

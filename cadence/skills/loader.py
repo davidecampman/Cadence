@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 import zipfile
@@ -11,6 +12,8 @@ from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 
 class SkillDefinition(BaseModel):
@@ -78,8 +81,9 @@ class SkillLoader:
                         if existing and existing.semver >= skill.semver:
                             continue
                         self._skills[skill.name] = skill
-                except Exception:
-                    continue  # Skip malformed files
+                except Exception as exc:
+                    logger.warning("Failed to parse skill file %s: %s", skill_file, exc)
+                    continue
 
         return list(self._skills.values())
 
@@ -87,22 +91,43 @@ class SkillLoader:
         return self._skills.get(name)
 
     def resolve_dependencies(self, skill_name: str) -> list[SkillDefinition]:
-        """Return a skill and all its dependencies in dependency order (topological sort)."""
+        """Return a skill and all its dependencies in dependency order (topological sort).
+
+        Warns about missing or circular dependencies but still returns
+        all resolvable skills.
+        """
         visited: set[str] = set()
+        in_stack: set[str] = set()
         result: list[SkillDefinition] = []
+        missing: list[str] = []
 
         def _visit(name: str):
             if name in visited:
                 return
-            visited.add(name)
+            if name in in_stack:
+                logger.warning("Circular dependency detected involving skill '%s'", name)
+                return
+            in_stack.add(name)
             skill = self._skills.get(name)
             if not skill:
+                missing.append(name)
+                in_stack.discard(name)
                 return
             for dep in skill.dependencies:
                 _visit(dep)
+            in_stack.discard(name)
+            visited.add(name)
             result.append(skill)
 
         _visit(skill_name)
+
+        if missing:
+            logger.warning(
+                "Skill '%s' has unresolved dependencies: %s",
+                skill_name,
+                ", ".join(missing),
+            )
+
         return result
 
     def get_skill_prompt(self, skill_name: str) -> str | None:
@@ -195,7 +220,11 @@ class SkillLoader:
                     relative = member
                 if not relative:
                     continue
-                dest = skill_folder / relative
+                dest = (skill_folder / relative).resolve()
+                # Prevent path traversal outside the skill folder
+                if not str(dest).startswith(str(skill_folder.resolve())):
+                    logger.warning("Skipping zip entry with path traversal: %s", member)
+                    continue
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_bytes(zf.read(member))
 
@@ -244,8 +273,8 @@ class SkillLoader:
         """Parse a SKILL.md file with YAML frontmatter."""
         text = path.read_text(errors="replace")
 
-        # Split frontmatter from body
-        frontmatter_match = re.match(r"^---\s*\n(.*?)\n---\s*\n(.*)", text, re.DOTALL)
+        # Split frontmatter from body (body may be empty)
+        frontmatter_match = re.match(r"^---\s*\n(.*?)\n---\s*\n?(.*)", text, re.DOTALL)
         if not frontmatter_match:
             # No frontmatter — treat entire file as instructions with filename as name
             name = path.parent.name or path.stem
