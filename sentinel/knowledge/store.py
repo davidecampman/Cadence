@@ -103,8 +103,14 @@ class KnowledgeStore:
         while start < length:
             end = min(start + chunk_size, length)
 
+            # If we can fit the rest in one chunk, take it all
+            if end >= length:
+                chunk = text[start:].strip()
+                if chunk:
+                    chunks.append(chunk)
+                break
+
             # Try to break at paragraph boundary
-            if end < length:
                 # Look for a paragraph break near the end
                 para_break = text.rfind("\n\n", start + chunk_size // 2, end)
                 if para_break != -1:
