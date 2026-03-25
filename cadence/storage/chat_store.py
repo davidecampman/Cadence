@@ -198,10 +198,16 @@ class ChatStore:
     # ---- Messages ----
 
     def add_message(self, msg: ChatMessageRecord) -> None:
-        """Append a message to a chat."""
+        """Append a message to a chat. Auto-creates the chat if it doesn't exist."""
         trace_json = json.dumps(msg.trace_steps) if msg.trace_steps else None
         now = time.time()
         with self._lock, self._get_conn() as conn:
+            # Ensure parent chat exists (handles race where message arrives before create)
+            conn.execute(
+                """INSERT OR IGNORE INTO chats (id, title, session_id, created_at, updated_at)
+                   VALUES (?, 'New Chat', NULL, ?, ?)""",
+                (msg.chat_id, now, now),
+            )
             conn.execute(
                 """INSERT INTO chat_messages
                    (id, chat_id, role, content, timestamp, duration_ms, trace_steps)
