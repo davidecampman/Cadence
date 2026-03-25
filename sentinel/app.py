@@ -5,6 +5,7 @@ from __future__ import annotations
 from sentinel.core.config import Config, load_config
 from sentinel.core.trace import TraceLogger
 from sentinel.agents.orchestrator import Orchestrator
+from sentinel.knowledge.store import KnowledgeStore
 from sentinel.memory.store import MemoryStore
 from sentinel.prompts.evolution import PromptEvolver
 from sentinel.prompts.store import PromptEvolutionStore
@@ -28,6 +29,7 @@ from sentinel.tools.prompt_tools import (
 from sentinel.tools.scratchpad import ScratchReadTool, ScratchWriteTool
 from sentinel.tools.text_tools import DiffPatchTool, RegexReplaceTool, SummarizeTextTool
 from sentinel.tools.vision import ImageDescribeTool, ScreenshotTool
+from sentinel.tools.knowledge_tools import KBDeleteTool, KBIngestTool, KBListTool, KBSearchTool
 from sentinel.tools.web import WebFetchTool
 
 
@@ -41,6 +43,7 @@ class SentinelApp:
             console=self.config.logging.rich_console,
         )
         self.memory = MemoryStore()
+        self.knowledge = KnowledgeStore()
         self.router = SmartRouter(self.config)
         self.skills = SkillLoader(self.config.skills.directories)
 
@@ -114,6 +117,12 @@ class SentinelApp:
         registry.register(MemorySaveTool(self.memory))
         registry.register(MemoryQueryTool(self.memory))
         registry.register(MemoryDeleteTool(self.memory))
+
+        # Knowledge base
+        registry.register(KBIngestTool(self.knowledge))
+        registry.register(KBSearchTool(self.knowledge))
+        registry.register(KBListTool(self.knowledge))
+        registry.register(KBDeleteTool(self.knowledge))
 
         # Prompt evolution (self-modifying prompts)
         if self.prompt_evolution_store:
