@@ -742,13 +742,6 @@ function App() {
               Skills
               <span className="badge">{skills.length}</span>
             </button>
-            <button
-              className={`sidebar-item ${view === 'config' ? 'active' : ''}`}
-              onClick={() => setView('config')}
-            >
-              <span className="icon">&#x2699;</span>
-              Config
-            </button>
           </div>
 
           <div className="sidebar-section">
@@ -769,13 +762,22 @@ function App() {
             <span className={`status-dot ${online ? 'online' : 'offline'}`} />
             {online ? 'API Connected' : 'API Disconnected'}
           </span>
-          <button
-            className="theme-toggle"
-            onClick={() => setLightMode((prev) => !prev)}
-            title={lightMode ? 'Switch to dark mode' : 'Switch to light mode'}
-          >
-            {lightMode ? '\u263E' : '\u2600'}
-          </button>
+          <span className="sidebar-footer-actions">
+            <button
+              className="theme-toggle"
+              onClick={() => setLightMode((prev) => !prev)}
+              title={lightMode ? 'Switch to dark mode' : 'Switch to light mode'}
+            >
+              {lightMode ? '\u25D1' : '\u25D0'}
+            </button>
+            <button
+              className={`config-gear-btn ${view === 'config' ? 'active' : ''}`}
+              onClick={() => setView('config')}
+              title="Settings"
+            >
+              &#x2699;&#xFE0E;
+            </button>
+          </span>
         </div>
       </nav>
 

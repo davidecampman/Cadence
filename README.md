@@ -18,11 +18,13 @@ graph TB
     subgraph API Layer
         FastAPI[FastAPI Server]
         WS[WebSocket]
+        SSE[SSE Streaming]
     end
 
     subgraph Orchestration
         Orch[Orchestrator]
         DAG[Task DAG]
+        Checkpoint[Checkpoint Manager]
     end
 
     subgraph Agents
@@ -32,6 +34,11 @@ graph TB
         A4[General Agent]
     end
 
+    subgraph Communication
+        Bus[Message Bus<br/>Pub/Sub]
+        Stream[Stream Collector]
+    end
+
     subgraph Core Services
         LLM[LLM Interface<br/>LiteLLM]
         Router[Smart Router]
@@ -39,6 +46,13 @@ graph TB
         Skills[Skill Loader]
         Tools[Tool Registry]
         Trace[Trace Logger]
+        MultiModal[Multi-Modal<br/>Vision Support]
+    end
+
+    subgraph Knowledge & Learning
+        KB[Knowledge Base<br/>ChromaDB]
+        KG[Knowledge Graph<br/>NetworkX]
+        Learning[Learning Store<br/>SQLite]
     end
 
     subgraph LLM Providers
@@ -51,19 +65,25 @@ graph TB
     WebUI --> FastAPI
     FastAPI --> Orch
     WS -.->|trace stream| WebUI
+    SSE -.->|token stream| WebUI
 
     Orch --> DAG
+    Orch --> Checkpoint
+    Checkpoint -.->|approval request| FastAPI
     DAG --> A1 & A2 & A3 & A4
 
     A1 & A2 & A3 & A4 --> Tools
     A1 & A2 & A3 & A4 --> LLM
     A1 & A2 & A3 & A4 --> Memory
+    A1 & A2 & A3 & A4 <--> Bus
+    A1 & A2 & A3 & A4 --> Stream
 
     LLM --> Router
+    LLM --> MultiModal
     Router --> Claude & GPT & Bedrock
 
-    Orch --> Skills
-    Orch --> Trace
+    Tools --> KB & KG
+    Orch --> Skills & Trace & Learning
     Trace -.-> WS
 ```
 
@@ -181,6 +201,141 @@ flowchart TD
     Store --- NS1 & NS2 & NS3
 ```
 
+### Agent Message Bus
+
+```mermaid
+flowchart TD
+    subgraph Agents
+        A1([Agent A])
+        A2([Agent B])
+        A3([Agent C])
+    end
+
+    subgraph Message Bus
+        Pub[Publish]
+        Topics[Topic Router]
+        Sub[Subscribers]
+        History[(Message History)]
+    end
+
+    subgraph Topics
+        T1[discovery]
+        T2[coordination]
+        T3[status]
+        T4[error]
+        T5[custom topics...]
+    end
+
+    A1 -->|publish| Pub
+    Pub --> Topics
+    Topics --> T1 & T2 & T3 & T4 & T5
+    T1 & T2 & T3 & T4 & T5 --> Sub
+    Sub -->|notify| A2 & A3
+    Pub --> History
+
+    subgraph Request-Reply
+        Req[Request with timeout]
+        Rep[Reply on reply_to topic]
+    end
+
+    A1 -->|request| Req
+    Req --> Topics
+    A2 -->|reply| Rep
+    Rep --> A1
+```
+
+### Streaming & Checkpoints
+
+```mermaid
+flowchart LR
+    subgraph Agent Execution
+        Agent([Agent]) --> Collector[Stream Collector]
+    end
+
+    subgraph Event Types
+        Collector -->|token| T[Text tokens]
+        Collector -->|thinking| Th[Reasoning steps]
+        Collector -->|tool_start| TS[Tool invocations]
+        Collector -->|tool_result| TR[Tool results]
+        Collector -->|done| D[Final response]
+    end
+
+    subgraph SSE Delivery
+        T & Th & TS & TR & D --> SSE[Server-Sent Events]
+        SSE --> Client([Web UI / Client])
+    end
+
+    subgraph Checkpoint Flow
+        Agent2([Agent]) -->|needs approval| CP[Checkpoint Manager]
+        CP -->|pending| API[REST API]
+        API -->|resolve| CP
+        CP -->|approved/rejected| Agent2
+    end
+```
+
+### Cross-Session Learning
+
+```mermaid
+flowchart TD
+    subgraph Recording
+        Agent([Agent completes task]) --> Record[Record strategy]
+        Record --> DB[(SQLite<br/>Learning Store)]
+    end
+
+    subgraph Strategy Record
+        DB --> Fields[task_type + strategy<br/>tools_used + model<br/>outcome + iterations<br/>tokens + duration]
+    end
+
+    subgraph Insights
+        Query([New task arrives]) --> Classify[Classify task type]
+        Classify --> Lookup[Query past strategies]
+        Lookup --> DB
+        DB --> Analyze[Rank by success rate]
+        Analyze --> Insight[LearningInsight<br/>confidence + recommendation]
+        Insight --> Agent2([Agent])
+    end
+
+    subgraph Analytics
+        DB --> Stats[Stats by task type]
+        DB --> BestTools[Best tools per task]
+    end
+```
+
+### Knowledge Graph
+
+```mermaid
+flowchart TD
+    subgraph Entities
+        E1[function:parse_config]
+        E2[class:ConfigManager]
+        E3[module:sentinel.core]
+        E4[file:config.py]
+        E5[concept:configuration]
+    end
+
+    subgraph Relationships
+        E1 -->|belongs_to| E2
+        E2 -->|contains| E1
+        E2 -->|defined_in| E4
+        E4 -->|part_of| E3
+        E2 -->|implements| E5
+    end
+
+    subgraph Operations
+        Add[Add Entity/Relation]
+        Search[Find Entities]
+        Neighbors[Get Neighbors]
+        Path[Find Path]
+        Subgraph[Extract Subgraph]
+    end
+
+    subgraph Storage
+        Graph[(NetworkX DiGraph)] --> JSON[JSON persistence]
+    end
+
+    Add & Search & Neighbors & Path & Subgraph --> Graph
+```
+
 ### System Component Map
 
 ```mermaid
@@ -192,6 +347,10 @@ graph LR
         types[types.py<br/>Pydantic models]
         trace[trace.py<br/>JSONL logger]
         keystore[keystore.py<br/>Encrypted keys]
+        message_bus[message_bus.py<br/>Pub/Sub]
+        streaming[streaming.py<br/>SSE events]
+        checkpoint[checkpoint.py<br/>Human-in-the-loop]
+        multimodal[multimodal.py<br/>Vision support]
     end
 
     subgraph sentinel/agents
@@ -206,10 +365,14 @@ graph LR
         browser_tool[browser.py<br/>Playwright]
         mem_tools[memory_tools.py]
         kb_tools[knowledge_tools.py]
+        graph_tools[graph_tools.py]
         prompt_tools[prompt_tools.py]
+        bus_tools[message_bus_tools.py]
+        cp_tools[checkpoint_tools.py]
+        vision_tools[vision.py]
         delegate[delegate.py]
         git[git_ops.py]
-        other[+ 6 more tools]
+        other[+ 5 more tools]
     end
 
     subgraph sentinel/memory
@@ -219,6 +382,11 @@ graph LR
     subgraph sentinel/knowledge
         kbstore[store.py<br/>Document search]
         parsers[parsers.py<br/>PDF/DOCX/email]
+        kg[graph.py<br/>Knowledge graph]
+    end
+
+    subgraph sentinel/learning
+        learn_store[store.py<br/>Strategy tracking]
     end
 
     subgraph sentinel/prompts
@@ -239,7 +407,7 @@ graph LR
     end
 
     subgraph API
-        api[api.py — FastAPI + WS]
+        api[api.py — FastAPI + WS + SSE]
         app[app.py — Bootstrap]
         cli[cli.py — REPL]
     end
@@ -248,27 +416,36 @@ graph LR
         react[React 19 + TS + Vite]
     end
 
-    app --> orch & agent & config & llm & memstore & router & loader & base
+    app --> orch & agent & config & llm & memstore & router & loader & base & message_bus & checkpoint & learn_store
     orch --> agent
-    agent --> llm & base & memstore
-    llm --> router
+    agent --> llm & base & memstore & message_bus & streaming
+    llm --> router & multimodal
     kb_tools --> kbstore
+    graph_tools --> kg
     kbstore --> parsers
     prompt_tools --> prompt_store & evolution
-    api --> app & chat_store
+    bus_tools --> message_bus
+    cp_tools --> checkpoint
+    api --> app & chat_store & streaming
     cli --> app
-    react -->|HTTP + WS| api
+    react -->|HTTP + WS + SSE| api
 ```
 
 ## Features
 
 - **Multi-Agent Orchestration** — Task DAG with dependency resolution, specialist agent roles (researcher, coder, reviewer), parallel execution, and loop detection
 - **Smart Model Routing** — Two-tier model strategy (fast/strong), automatic task classification, fallback chains, and per-model success tracking
+- **Agent Message Bus** — Async pub/sub inter-agent communication with topic-based routing, priority levels (low/normal/high/urgent), request-reply patterns with timeouts, and message history
+- **Streaming Responses** — Server-Sent Events (SSE) streaming with real-time token delivery, tool execution events, reasoning steps, and status updates via async event queues
+- **Human-in-the-Loop Checkpoints** — Approval workflows that pause agent execution for human review, with checkpoint types (approval, clarification, confirmation), configurable timeouts, and REST API resolution
 - **Tiered Memory** — ChromaDB-backed vector store with time-decay relevance scoring, importance weighting, and namespace isolation
 - **Knowledge Base Ingestion** — Ingest and search across PDFs, DOCX, emails (.eml), web pages, and plain text with automatic chunking and semantic search
+- **Knowledge Graph** — NetworkX-backed directed graph for structured entity-relationship modeling, with path finding, subgraph extraction, neighbor traversal, and JSON persistence
+- **Cross-Session Learning** — SQLite-backed strategy tracking across sessions with task classification, success rate analytics, tool effectiveness ranking, and confidence-scored recommendations
+- **Multi-Modal Input** — Vision support for images (PNG, JPEG, GIF, WebP) from files, base64, or URLs, with automatic vision model detection across Claude, GPT-4, and Gemini
 - **Self-Modifying Prompts** — LLM-driven prompt evolution with reflection after tasks, performance-based modifications, version history, and rollback
 - **Skill System** — Declarative SKILL.md format with versioning, dependency resolution, and auto-discovery
-- **Built-in Tools** — File operations, code execution (sandboxed), web fetching, memory management, browser automation, knowledge base, prompt management, and agent delegation
+- **Built-in Tools** — 30+ tools for file operations, code execution (sandboxed), web fetching, memory, browser automation, knowledge base/graph, prompt management, learning insights, message bus, and agent delegation
 - **Browser Automation** — Playwright-powered headless browsing with navigation, clicking, form filling, screenshots, and structured data extraction
 - **Security & Sandboxing** — Permission tiers (read-only, standard, privileged, unrestricted), execution timeouts, resource limits, path allowlists, and blocked command lists
 - **Persistent Chat Storage** — SQLite-backed chat and session history that survives server restarts, with automatic localStorage migration and offline fallback
@@ -281,9 +458,10 @@ graph LR
 | Layer | Technology |
 |-------|------------|
 | Core | Python 3.11+, LiteLLM, Pydantic 2.0+ |
-| API | FastAPI, Uvicorn, WebSocket |
+| API | FastAPI, Uvicorn, WebSocket, Server-Sent Events |
 | Memory | ChromaDB |
-| Knowledge | ChromaDB, PyPDF, python-docx, BeautifulSoup4 |
+| Knowledge | ChromaDB, NetworkX, PyPDF, python-docx, BeautifulSoup4 |
+| Learning | SQLite (WAL mode) |
 | Storage | SQLite (WAL mode) |
 | Browser | Playwright (optional) |
 | Cloud | AWS Bedrock via boto3 (optional) |
@@ -336,20 +514,21 @@ This serves the REST API at `http://localhost:8000/api`, WebSocket at `ws://loca
 ```
 sentinel/
 ├── agents/          # Multi-agent orchestration and task DAG execution
-├── core/            # Agent loop, config, LLM abstraction, keystore, types
-├── knowledge/       # Knowledge base ingestion, document parsing, and semantic search
+├── core/            # Agent loop, config, LLM, keystore, message bus, streaming, checkpoints, multi-modal
+├── knowledge/       # Knowledge base ingestion, document parsing, knowledge graph, and semantic search
+├── learning/        # Cross-session strategy tracking and analytics
 ├── memory/          # ChromaDB-backed tiered memory with time decay
 ├── prompts/         # Self-modifying prompt evolution and version tracking
 ├── routing/         # Smart model routing with fallback chains
 ├── skills/          # SKILL.md parser with dependency resolution
 ├── storage/         # SQLite-backed persistent chat and session storage
-├── tools/           # Built-in tools (see Tools section below)
-├── api.py           # FastAPI REST + WebSocket endpoints
+├── tools/           # 30+ built-in tools (see Tools section below)
+├── api.py           # FastAPI REST + WebSocket + SSE endpoints
 ├── cli.py           # Interactive REPL
 └── server.py        # API server entry point
 config/
 └── default.yaml     # Default configuration
-data/                # Runtime data (SQLite DB, traces, memory vectors)
+data/                # Runtime data (SQLite DB, traces, memory vectors, knowledge graph)
 frontend/            # React + TypeScript web UI
 skills/              # Example skill definitions
 tests/               # Unit and integration tests
@@ -392,7 +571,12 @@ Key settings:
 | BrowseWeb, BrowserClick, BrowserForm, BrowserScreenshot, BrowserExtract | PRIVILEGED | Playwright-powered headless browser automation |
 | MemorySave, MemoryQuery, MemoryDelete | STANDARD | Tiered memory with namespace isolation |
 | KBIngest, KBSearch, KBList, KBDelete | STANDARD | Knowledge base document ingestion and search |
+| GraphAddEntity, GraphAddRelation, GraphQuery | STANDARD | Knowledge graph entity and relationship management |
 | PromptView, PromptModify, PromptHistory, PromptRollback | STANDARD | Self-modifying prompt management |
+| BusPublish, BusPeek | STANDARD | Inter-agent message bus communication |
+| RequestApproval | STANDARD | Human-in-the-loop checkpoint requests |
+| LearningInsights, LearningStats | READ_ONLY | Cross-session strategy analytics and recommendations |
+| Screenshot, ImageDescribe | STANDARD | Screen capture and image analysis for multi-modal input |
 | Delegate | STANDARD | Spawn sub-agents for parallel task execution |
 | GitOps | PRIVILEGED | Git operations (status, diff, commit, branch) |
 | Database | PRIVILEGED | Database queries and schema inspection |
@@ -403,6 +587,7 @@ Key settings:
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/chat` | Send a message |
+| POST | `/api/chat/stream` | Send a message with SSE streaming response |
 | GET | `/chats` | List all persisted chats |
 | GET | `/chats/{id}` | Get a chat with all messages |
 | POST | `/chats` | Create a new chat |
@@ -424,6 +609,18 @@ Key settings:
 | GET | `/api/kb/documents` | List all ingested documents |
 | DELETE | `/api/kb/documents/{id}` | Delete a document |
 | GET | `/api/kb/stats` | Knowledge base statistics |
+| POST | `/api/graph/entities` | Create a knowledge graph entity |
+| GET | `/api/graph/entities` | Search entities by name or type |
+| POST | `/api/graph/relationships` | Create a relationship between entities |
+| GET | `/api/graph/neighbors/{id}` | Get neighboring entities |
+| GET | `/api/graph/stats` | Knowledge graph statistics |
+| DELETE | `/api/graph/entities/{id}` | Delete an entity and its edges |
+| GET | `/api/bus/topics` | List message bus topics and stats |
+| GET | `/api/bus/messages/{topic}` | Read recent messages on a topic |
+| GET | `/api/checkpoints` | List checkpoints (filter by status) |
+| POST | `/api/checkpoints/{id}/resolve` | Approve or reject a checkpoint |
+| GET | `/api/learning/stats` | Aggregate learning statistics |
+| GET | `/api/learning/insights/{type}` | Get strategy recommendations for task type |
 | GET | `/api/files/download` | Download a project file |
 | GET | `/api/files/reveal` | Open file location in system file manager |
 

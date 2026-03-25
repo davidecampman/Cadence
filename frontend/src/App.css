@@ -232,15 +232,21 @@ body.light-mode .sidebar {
 .status-dot.offline { background: var(--error); }
 
 /* ═══════════════════════════════════════════════
-   THEME TOGGLE
+   FOOTER ACTION BUTTONS (theme + config gear)
    ═══════════════════════════════════════════════ */
+.sidebar-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .theme-toggle {
   background: rgba(45, 212, 191, 0.12);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 16px;
+  font-size: 15px;
   width: 32px;
   height: 32px;
   display: flex;
@@ -254,6 +260,34 @@ body.light-mode .sidebar {
   background: rgba(45, 212, 191, 0.22);
   color: var(--accent);
   border-color: rgba(45, 212, 191, 0.35);
+}
+
+.config-gear-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 17px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  padding: 0;
+}
+
+.config-gear-btn:hover {
+  background: rgba(45, 212, 191, 0.12);
+  color: var(--text-secondary);
+  border-color: rgba(45, 212, 191, 0.35);
+}
+
+.config-gear-btn.active {
+  background: rgba(45, 212, 191, 0.18);
+  color: var(--accent);
+  border-color: rgba(45, 212, 191, 0.4);
 }
 
 /* ═══════════════════════════════════════════════
