@@ -440,11 +440,83 @@ body.light-mode .chat-messages {
   border-radius: var(--radius);
   font-size: 14px;
   line-height: 1.6;
-  white-space: pre-wrap;
   word-break: break-word;
   backdrop-filter: var(--glass-blur-sm);
   -webkit-backdrop-filter: var(--glass-blur-sm);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.message-body.user {
+  white-space: pre-wrap;
+}
+
+.message-body.agent p {
+  margin: 0.4em 0;
+}
+
+.message-body.agent h1,
+.message-body.agent h2,
+.message-body.agent h3 {
+  margin: 0.6em 0 0.3em;
+}
+
+.message-body.agent h1 { font-size: 1.3em; }
+.message-body.agent h2 { font-size: 1.15em; }
+.message-body.agent h3 { font-size: 1.05em; }
+
+.message-body.agent ul,
+.message-body.agent ol {
+  margin: 0.3em 0;
+  padding-left: 1.5em;
+}
+
+.message-body.agent li {
+  margin: 0.15em 0;
+}
+
+.message-body.agent hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0.6em 0;
+}
+
+.message-body.agent table {
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 13px;
+  width: 100%;
+}
+
+.message-body.agent th,
+.message-body.agent td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.message-body.agent th {
+  background: rgba(255, 255, 255, 0.05);
+  font-weight: 600;
+}
+
+.message-body.agent code {
+  background: rgba(0, 0, 0, 0.2);
+  padding: 2px 5px;
+  border-radius: 3px;
+  font-size: 13px;
+}
+
+.message-body.agent pre {
+  background: rgba(0, 0, 0, 0.25);
+  padding: 10px 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 0.4em 0;
+}
+
+.message-body.agent pre code {
+  background: none;
+  padding: 0;
 }
 
 .message-body.user {

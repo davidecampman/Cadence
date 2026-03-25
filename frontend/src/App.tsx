@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import ReactMarkdown from 'react-markdown'
 import {
   sendMessage,
   fetchConfig,
@@ -74,7 +75,7 @@ function chatTitle(messages: ChatMessage[]): string {
 }
 
 /** Render message content, replacing [[FILE:/path]] markers with download/reveal buttons. */
-function renderMessageContent(content: string) {
+function renderMessageContent(content: string, role: string = 'user') {
   const FILE_RE = /\[\[FILE:(.*?)\]\]/g;
   const parts: (string | { path: string })[] = [];
   let last = 0;
@@ -86,15 +87,23 @@ function renderMessageContent(content: string) {
   }
   if (last < content.length) parts.push(content.slice(last));
 
-  // If no file markers found, also scan for absolute paths as a fallback
+  // If no file markers found, render based on role
   if (parts.length === 1 && typeof parts[0] === 'string') {
+    if (role === 'agent') {
+      return <ReactMarkdown>{content}</ReactMarkdown>;
+    }
     return <>{content}</>;
   }
 
   return (
     <>
       {parts.map((part, i) => {
-        if (typeof part === 'string') return <span key={i}>{part}</span>;
+        if (typeof part === 'string') {
+          if (role === 'agent') {
+            return <ReactMarkdown key={i}>{part}</ReactMarkdown>;
+          }
+          return <span key={i}>{part}</span>;
+        }
         const fileName = part.path.split('/').pop() || part.path;
         return (
           <span key={i} className="file-link-group">
@@ -900,7 +909,7 @@ function App() {
                         </span>
                         <span className="message-time">{formatTime(msg.timestamp)}</span>
                       </div>
-                      <div className={`message-body ${msg.role}`}>{renderMessageContent(msg.content)}</div>
+                      <div className={`message-body ${msg.role}`}>{renderMessageContent(msg.content, msg.role)}</div>
                       {msg.duration_ms && (
                         <div className="message-duration">
                           Completed in {(msg.duration_ms / 1000).toFixed(1)}s
