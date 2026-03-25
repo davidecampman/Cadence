@@ -784,6 +784,166 @@ async def health():
     return {"status": "ok", "version": "0.1.0"}
 
 
+# --- Knowledge base endpoints ---
+
+_kb_store = None
+
+
+def get_kb_store():
+    global _kb_store
+    if _kb_store is None:
+        from sentinel.knowledge.store import KnowledgeStore
+        _kb_store = KnowledgeStore()
+    return _kb_store
+
+
+class KBIngestRequest(BaseModel):
+    source: str  # file path, URL, or raw text
+    title: str
+    source_type: str | None = None  # auto-detected if omitted
+
+
+class KBSearchRequest(BaseModel):
+    query: str
+    max_results: int = 5
+    source_filter: str | None = None
+
+
+@app.post("/api/kb/ingest")
+async def kb_ingest(req: KBIngestRequest):
+    """Ingest a document into the knowledge base."""
+    from sentinel.knowledge.parsers import PARSERS, detect_source_type
+
+    store = get_kb_store()
+    stype = req.source_type or detect_source_type(req.source)
+    parser = PARSERS.get(stype)
+    if not parser:
+        return {"error": f"Unsupported source type: {stype}"}, 400
+
+    try:
+        text, metadata = parser(req.source)
+    except Exception as e:
+        return {"error": f"Failed to parse: {e}"}, 400
+
+    if not text or not text.strip():
+        return {"error": "No text content extracted"}, 400
+
+    doc = await store.ingest(
+        title=req.title,
+        content=text,
+        source=stype,
+        origin=req.source if stype != "text" else "",
+        metadata=metadata,
+    )
+    return {
+        "status": "ingested",
+        "document_id": doc.id,
+        "title": doc.title,
+        "source": doc.source,
+        "chunk_count": doc.chunk_count,
+    }
+
+
+@app.post("/api/kb/ingest/upload")
+async def kb_ingest_upload(file: UploadFile, title: str = Query("")):
+    """Upload a file (PDF, DOCX, EML, TXT) to ingest into the knowledge base."""
+    from sentinel.knowledge.parsers import PARSERS, detect_source_type
+
+    store = get_kb_store()
+    filename = file.filename or "upload"
+    stype = detect_source_type(filename)
+    doc_title = title or filename
+
+    data = await file.read()
+
+    parser = PARSERS.get(stype)
+    if not parser:
+        return {"error": f"Unsupported file type: {stype}"}, 400
+
+    try:
+        text, metadata = parser(data)
+    except Exception as e:
+        return {"error": f"Failed to parse: {e}"}, 400
+
+    if not text or not text.strip():
+        return {"error": "No text content extracted from file"}, 400
+
+    doc = await store.ingest(
+        title=doc_title,
+        content=text,
+        source=stype,
+        origin=filename,
+        metadata=metadata,
+    )
+    return {
+        "status": "ingested",
+        "document_id": doc.id,
+        "title": doc.title,
+        "source": doc.source,
+        "chunk_count": doc.chunk_count,
+    }
+
+
+@app.post("/api/kb/search")
+async def kb_search(req: KBSearchRequest):
+    """Search the knowledge base."""
+    store = get_kb_store()
+    results = await store.search(
+        query=req.query,
+        max_results=req.max_results,
+        source_filter=req.source_filter,
+    )
+    return {
+        "results": [
+            {
+                "chunk_id": r.chunk.id,
+                "content": r.chunk.content,
+                "similarity": round(r.similarity, 4),
+                "relevance": round(r.relevance, 4),
+                "document_id": r.chunk.document_id,
+                "document_title": r.document.title if r.document else "",
+                "source": r.document.source if r.document else "",
+                "origin": r.document.origin if r.document else "",
+            }
+            for r in results
+        ],
+        "total": len(results),
+    }
+
+
+@app.get("/api/kb/documents")
+async def kb_list_documents():
+    """List all documents in the knowledge base."""
+    store = get_kb_store()
+    docs = await store.list_documents()
+    return [
+        {
+            "id": d.id,
+            "title": d.title,
+            "source": d.source,
+            "origin": d.origin,
+            "chunk_count": d.chunk_count,
+            "ingested_at": d.ingested_at,
+        }
+        for d in docs
+    ]
+
+
+@app.delete("/api/kb/documents/{document_id}")
+async def kb_delete_document(document_id: str):
+    """Delete a document and its chunks from the knowledge base."""
+    store = get_kb_store()
+    ok = await store.delete_document(document_id)
+    return {"status": "deleted" if ok else "not_found"}
+
+
+@app.get("/api/kb/stats")
+async def kb_stats():
+    """Get knowledge base statistics."""
+    store = get_kb_store()
+    return await store.stats()
+
+
 # --- WebSocket for live trace streaming ---
 
 @app.websocket("/ws")
