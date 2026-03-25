@@ -36,6 +36,8 @@ agents:
   max_parallel: 4                   # Max concurrent agents
   loop_detection_window: 5          # Check last N outputs for repetition
   max_iterations_per_task: 25       # Circuit breaker per task
+  max_tool_result_chars: 16000      # Truncate tool outputs beyond this in agent history
+  prune_threshold: 40               # Prune older tool results when history exceeds this many messages
 
 memory:
   backend: "chromadb"               # chromadb | faiss
