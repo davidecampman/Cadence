@@ -89,6 +89,7 @@ class SqlQueryTool(Tool):
             if not db_path.exists():
                 return f"Database not found: {database}"
 
+        conn = None
         try:
             conn = sqlite3.connect(database)
             conn.row_factory = sqlite3.Row
@@ -101,7 +102,6 @@ class SqlQueryTool(Tool):
 
             rows = cursor.fetchmany(max_rows + 1)
             if not rows:
-                conn.close()
                 return "(no results)"
 
             # Format as table
@@ -115,8 +115,10 @@ class SqlQueryTool(Tool):
             if len(rows) > max_rows:
                 lines.append(f"... ({max_rows} rows shown, more available)")
 
-            conn.close()
             return "\n".join(lines)
 
         except sqlite3.Error as e:
             return f"SQL error: {e}"
+        finally:
+            if conn:
+                conn.close()
