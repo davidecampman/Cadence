@@ -18,10 +18,12 @@ from fastapi import FastAPI, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from sentinel.app import SentinelApp
 from sentinel.core.config import update_config as _update_config
+from sentinel.core.streaming import StreamCollector, StreamEvent
 from sentinel.core.keystore import (
     save_key as _save_key,
     delete_key as _delete_key,
@@ -108,6 +110,7 @@ def _patched_log(step: TraceStep) -> None:
 class ChatRequest(BaseModel):
     message: str
     session_id: str | None = None
+    images: list[dict] | None = None  # Optional image inputs: [{"data": "base64...", "media_type": "image/png"}]
 
 
 class ChatResponse(BaseModel):
@@ -975,6 +978,260 @@ async def kb_stats():
     """Get knowledge base statistics."""
     store = get_kb_store()
     return await store.stats()
+
+
+# --- Streaming chat endpoint (SSE) ---
+
+@app.post("/api/chat/stream")
+async def chat_stream(req: ChatRequest):
+    """Server-Sent Events streaming endpoint for chat.
+
+    Streams thinking steps, tool calls, and tokens in real-time,
+    finishing with a 'done' event containing the full response.
+    """
+    agent_app = get_app()
+    store = get_chat_store()
+    session_id = req.session_id or str(uuid.uuid4())[:8]
+    history = list(store.get_session_history(session_id))
+
+    collector = StreamCollector()
+
+    async def _run_and_collect():
+        start = time.time()
+        try:
+            response = await agent_app.run(req.message, conversation_history=history)
+            duration_ms = (time.time() - start) * 1000
+            # Persist exchange
+            new_history = list(history)
+            new_history.append({"role": "user", "content": req.message})
+            new_history.append({"role": "assistant", "content": response})
+            store.save_session_history(session_id, new_history)
+            await collector.emit_done(
+                full_response=response,
+                session_id=session_id,
+                duration_ms=duration_ms,
+            )
+        except Exception as e:
+            await collector.emit_error(str(e))
+
+    # Run agent in background, stream events to client
+    asyncio.create_task(_run_and_collect())
+
+    # Patch the trace logger to emit thinking events to the collector
+    original_log = agent_app.trace.log
+
+    def _streaming_log(step):
+        original_log(step)
+        try:
+            loop = asyncio.get_running_loop()
+            if step.step_type == "thought":
+                loop.create_task(collector.emit_thinking(step.content, step.agent_id))
+            elif step.step_type == "action":
+                loop.create_task(collector.emit_status(step.content, step.agent_id))
+        except RuntimeError:
+            pass
+
+    agent_app.trace.log = _streaming_log
+
+    async def _event_generator():
+        try:
+            async for event in collector:
+                yield event.to_sse()
+        finally:
+            agent_app.trace.log = original_log
+
+    return StreamingResponse(
+        _event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# --- Checkpoint (human-in-the-loop) endpoints ---
+
+class CheckpointResolveRequest(BaseModel):
+    approved: bool
+    response: str | None = None
+
+
+@app.get("/api/checkpoints")
+async def list_checkpoints(status: str | None = None):
+    """List checkpoints. Use status='pending' to get only unresolved ones."""
+    agent_app = get_app()
+    mgr = agent_app.checkpoint_manager
+    if not mgr:
+        return {"error": "Checkpoints are disabled"}, 400
+
+    if status == "pending":
+        checkpoints = mgr.get_pending()
+    else:
+        checkpoints = mgr.get_all()
+
+    return [cp.model_dump() for cp in checkpoints]
+
+
+@app.post("/api/checkpoints/{checkpoint_id}/resolve")
+async def resolve_checkpoint(checkpoint_id: str, req: CheckpointResolveRequest):
+    """Approve or reject a pending checkpoint."""
+    agent_app = get_app()
+    mgr = agent_app.checkpoint_manager
+    if not mgr:
+        return {"error": "Checkpoints are disabled"}, 400
+
+    cp = mgr.resolve(checkpoint_id, approved=req.approved, response=req.response)
+    if not cp:
+        return {"error": "Checkpoint not found or already resolved"}, 404
+    return cp.model_dump()
+
+
+# --- Message bus endpoints ---
+
+@app.get("/api/bus/topics")
+async def bus_topics():
+    """List all message bus topics."""
+    agent_app = get_app()
+    bus = agent_app.message_bus
+    if not bus:
+        return {"error": "Message bus is disabled"}, 400
+    return {"topics": bus.topics(), "stats": bus.stats()}
+
+
+@app.get("/api/bus/messages/{topic}")
+async def bus_messages(topic: str, limit: int = 20):
+    """Read recent messages on a topic."""
+    agent_app = get_app()
+    bus = agent_app.message_bus
+    if not bus:
+        return {"error": "Message bus is disabled"}, 400
+    messages = bus.peek(topic, limit=limit)
+    return [m.model_dump() for m in messages]
+
+
+# --- Knowledge graph endpoints ---
+
+class GraphEntityRequest(BaseModel):
+    name: str
+    entity_type: str
+    properties: dict | None = None
+
+
+class GraphRelationRequest(BaseModel):
+    source_id: str
+    target_id: str
+    relation_type: str
+    weight: float = 1.0
+    properties: dict | None = None
+
+
+@app.post("/api/graph/entities")
+async def graph_add_entity(req: GraphEntityRequest):
+    """Add an entity to the knowledge graph."""
+    agent_app = get_app()
+    graph = agent_app.knowledge_graph
+    if not graph:
+        return {"error": "Knowledge graph is disabled"}, 400
+    entity = graph.add_entity(
+        name=req.name,
+        entity_type=req.entity_type,
+        properties=req.properties,
+    )
+    return entity.model_dump()
+
+
+@app.get("/api/graph/entities")
+async def graph_find_entities(
+    name: str | None = None,
+    entity_type: str | None = None,
+    limit: int = 20,
+):
+    """Search for entities in the knowledge graph."""
+    agent_app = get_app()
+    graph = agent_app.knowledge_graph
+    if not graph:
+        return {"error": "Knowledge graph is disabled"}, 400
+    entities = graph.find_entities(name=name, entity_type=entity_type, limit=limit)
+    return [e.model_dump() for e in entities]
+
+
+@app.post("/api/graph/relationships")
+async def graph_add_relation(req: GraphRelationRequest):
+    """Add a relationship between entities."""
+    agent_app = get_app()
+    graph = agent_app.knowledge_graph
+    if not graph:
+        return {"error": "Knowledge graph is disabled"}, 400
+    rel = graph.add_relationship(
+        source_id=req.source_id,
+        target_id=req.target_id,
+        relation_type=req.relation_type,
+        weight=req.weight,
+        properties=req.properties,
+    )
+    if not rel:
+        return {"error": "One or both entity IDs not found"}, 404
+    return rel.model_dump()
+
+
+@app.get("/api/graph/neighbors/{entity_id}")
+async def graph_neighbors(entity_id: str, relation_type: str | None = None):
+    """Get neighbors of an entity."""
+    agent_app = get_app()
+    graph = agent_app.knowledge_graph
+    if not graph:
+        return {"error": "Knowledge graph is disabled"}, 400
+    result = graph.get_neighbors(entity_id, relation_type=relation_type)
+    return {
+        "entities": [e.model_dump() for e in result.entities],
+        "relationships": [r.model_dump() for r in result.relationships],
+    }
+
+
+@app.get("/api/graph/stats")
+async def graph_stats():
+    """Get knowledge graph statistics."""
+    agent_app = get_app()
+    graph = agent_app.knowledge_graph
+    if not graph:
+        return {"error": "Knowledge graph is disabled"}, 400
+    return graph.stats()
+
+
+@app.delete("/api/graph/entities/{entity_id}")
+async def graph_delete_entity(entity_id: str):
+    """Delete an entity and its relationships."""
+    agent_app = get_app()
+    graph = agent_app.knowledge_graph
+    if not graph:
+        return {"error": "Knowledge graph is disabled"}, 400
+    ok = graph.delete_entity(entity_id)
+    return {"status": "deleted" if ok else "not_found"}
+
+
+# --- Learning endpoints ---
+
+@app.get("/api/learning/stats")
+async def learning_stats():
+    """Get cross-session learning statistics."""
+    agent_app = get_app()
+    store = agent_app.learning_store
+    if not store:
+        return {"error": "Learning is disabled"}, 400
+    return store.get_stats()
+
+
+@app.get("/api/learning/insights/{task_type}")
+async def learning_insights(task_type: str, limit: int = 5):
+    """Get learning insights for a task type."""
+    agent_app = get_app()
+    store = agent_app.learning_store
+    if not store:
+        return {"error": "Learning is disabled"}, 400
+    insights = store.get_insights(task_type, limit=limit)
+    return [i.model_dump() for i in insights]
 
 
 # --- WebSocket for live trace streaming ---

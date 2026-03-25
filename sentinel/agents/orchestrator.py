@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 from sentinel.core.agent import Agent
+from sentinel.core.checkpoint import CheckpointManager
 from sentinel.core.config import Config, get_config
 from sentinel.core.llm import chat_completion
+from sentinel.core.message_bus import MessageBus
 from sentinel.core.trace import TraceLogger
 from sentinel.core.types import (
     AgentRole,
@@ -17,6 +20,7 @@ from sentinel.core.types import (
     Task,
     TaskStatus,
 )
+from sentinel.learning.store import LearningStore, OutcomeRating, StrategyRecord
 from sentinel.prompts.evolution import PromptEvolver
 from sentinel.prompts.store import PromptEvolutionStore
 from sentinel.skills.loader import SkillLoader
@@ -134,6 +138,9 @@ class Orchestrator:
         config: Config | None = None,
         skill_loader: SkillLoader | None = None,
         prompt_evolver: PromptEvolver | None = None,
+        message_bus: MessageBus | None = None,
+        checkpoint_manager: CheckpointManager | None = None,
+        learning_store: LearningStore | None = None,
     ):
         self.tools = tool_registry
         self.trace = trace
@@ -141,6 +148,16 @@ class Orchestrator:
         self.skill_loader = skill_loader
         self.dag = TaskDAG()
         self._session_tokens: int = 0
+        self._session_id: str = ""
+
+        # Inter-agent communication
+        self.message_bus = message_bus
+
+        # Human-in-the-loop
+        self.checkpoint_manager = checkpoint_manager
+
+        # Cross-session learning
+        self.learning_store = learning_store
 
         # Initialize prompt evolver if evolution is enabled
         if prompt_evolver:
@@ -177,8 +194,12 @@ class Orchestrator:
         self,
         user_request: str,
         conversation_history: list[dict[str, str]] | None = None,
+        session_id: str = "",
     ) -> str:
         """Process a user request end-to-end."""
+        self._session_id = session_id
+        _start_time = time.time()
+
         # Check session budget before starting
         budget_error = self._check_session_budget()
         if budget_error:
@@ -191,8 +212,17 @@ class Orchestrator:
 
         self._conversation_history = conversation_history or []
 
+        # Query learning insights if available
+        learning_context = ""
+        if self.learning_store:
+            task_type = self.learning_store.classify_task(user_request)
+            insights = self.learning_store.get_insights(task_type, limit=3)
+            if insights:
+                tips = "; ".join(i.recommendation for i in insights[:2])
+                learning_context = f"\n[Learning from past tasks ({task_type})]: {tips}"
+
         # Phase 1: Plan — decompose into tasks
-        tasks = await self._plan(user_request)
+        tasks = await self._plan(user_request + learning_context)
 
         if not tasks:
             # Simple request, no decomposition needed — just run directly
@@ -250,6 +280,33 @@ class Orchestrator:
 
         # Phase 4: Self-evaluate
         final = await self._evaluate(user_request, final)
+
+        # Record learning outcome
+        if self.learning_store:
+            task_type = self.learning_store.classify_task(user_request)
+            all_failed = all(
+                t.status == TaskStatus.FAILED for t in self.dag._tasks.values()
+            )
+            has_failures = any(
+                t.status == TaskStatus.FAILED for t in self.dag._tasks.values()
+            )
+            outcome = (
+                OutcomeRating.FAILURE if all_failed
+                else OutcomeRating.PARTIAL if has_failures
+                else OutcomeRating.SUCCESS
+            )
+            self.learning_store.record(StrategyRecord(
+                session_id=self._session_id,
+                task_type=task_type,
+                task_description=user_request[:500],
+                strategy=f"Decomposed into {len(tasks)} tasks" if tasks else "Direct execution",
+                tools_used=[],
+                model_used=self.config.models.strong,
+                role_used="orchestrator",
+                outcome=outcome,
+                tokens_used=self._session_tokens,
+                duration_ms=(time.time() - _start_time) * 1000,
+            ))
 
         return final
 
@@ -337,6 +394,15 @@ class Orchestrator:
             if dep_id in results:
                 context_parts.append(f"\n[Result from prerequisite task {dep_id[:6]}]:\n{results[dep_id]}")
 
+        # Include recent bus messages so the agent sees discoveries from other agents
+        if self.message_bus:
+            discovery_msgs = self.message_bus.peek("discovery", limit=5)
+            if discovery_msgs:
+                bus_context = "\n".join(
+                    f"[{m.sender_id}]: {m.content[:200]}" for m in discovery_msgs
+                )
+                context_parts.append(f"\n[Recent discoveries from other agents]:\n{bus_context}")
+
         task_prompt = "\n".join(context_parts)
 
         self.trace.action("orchestrator", f"Assigning [{task.id[:6]}] to {agent.id}")
@@ -346,11 +412,27 @@ class Orchestrator:
             task.result = result
             results[task.id] = result
             self.trace.result("orchestrator", f"Task [{task.id[:6]}] completed")
+
+            # Publish task completion on message bus
+            if self.message_bus:
+                await self.message_bus.publish(
+                    topic="status",
+                    sender_id=agent.id,
+                    content=f"Task [{task.id[:6]}] completed: {task.description[:100]}",
+                )
         except Exception as e:
             task.status = TaskStatus.FAILED
             task.result = f"Error: {e}"
             results[task.id] = task.result
             self.trace.error("orchestrator", f"Task [{task.id[:6]}] failed: {e}")
+
+            # Publish failure on message bus
+            if self.message_bus:
+                await self.message_bus.publish(
+                    topic="error",
+                    sender_id=agent.id,
+                    content=f"Task [{task.id[:6]}] failed: {e}",
+                )
         finally:
             self._session_tokens += agent._total_tokens
 
