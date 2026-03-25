@@ -719,6 +719,152 @@ body.light-mode .chat-send-btn {
 }
 
 /* ═══════════════════════════════════════════════
+   FILE ATTACHMENTS
+   ═══════════════════════════════════════════════ */
+
+.chat-input-area {
+  position: relative;
+}
+
+.chat-input-area.dragging {
+  border-radius: var(--radius);
+  outline: 2px dashed rgba(45, 212, 191, 0.5);
+  outline-offset: -2px;
+}
+
+.drop-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(45, 212, 191, 0.08);
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.drop-overlay-text {
+  color: var(--accent);
+  font-size: 15px;
+  font-weight: 600;
+  padding: 8px 20px;
+  border-radius: var(--radius-sm);
+  background: rgba(10, 20, 50, 0.8);
+  border: 1px solid rgba(45, 212, 191, 0.3);
+}
+
+body.light-mode .drop-overlay {
+  background: rgba(45, 212, 191, 0.06);
+}
+
+body.light-mode .drop-overlay-text {
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.attachments-preview {
+  max-width: 760px;
+  margin: 0 auto 8px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.attachment-thumb {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid rgba(45, 212, 191, 0.2);
+  background: rgba(10, 20, 50, 0.6);
+  flex-shrink: 0;
+}
+
+body.light-mode .attachment-thumb {
+  background: rgba(240, 245, 250, 0.8);
+  border-color: rgba(45, 212, 191, 0.3);
+}
+
+.attachment-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.attachment-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  border: none;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.attachment-thumb:hover .attachment-remove {
+  opacity: 1;
+}
+
+.attachment-name {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  font-size: 9px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 1px 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-attach-btn {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: 1px solid rgba(45, 212, 191, 0.2);
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  z-index: 1;
+}
+
+.chat-attach-btn:hover {
+  border-color: rgba(45, 212, 191, 0.5);
+  color: var(--accent);
+  background: rgba(45, 212, 191, 0.06);
+}
+
+.chat-attach-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Adjust chat-input padding to make room for attach button */
+.chat-input {
+  padding-left: 52px !important;
+}
+
+/* ═══════════════════════════════════════════════
    TRACE PANEL — glass sidebar
    ═══════════════════════════════════════════════ */
 .trace-panel {

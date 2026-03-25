@@ -209,10 +209,11 @@ class CadenceApp:
         self,
         user_input: str,
         conversation_history: list[dict[str, str]] | None = None,
+        images: list[dict] | None = None,
     ) -> str:
         """Process a user request through the orchestrator."""
         return await self.orchestrator.run(
-            user_input, conversation_history=conversation_history or []
+            user_input, conversation_history=conversation_history or [], images=images
         )
 
     def discover_skills(self) -> int:

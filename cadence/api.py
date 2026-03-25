@@ -244,7 +244,7 @@ async def chat(req: ChatRequest):
     start = time.time()
 
     try:
-        response = await agent_app.run(req.message, conversation_history=history)
+        response = await agent_app.run(req.message, conversation_history=history, images=req.images)
     except Exception as e:
         err_str = str(e)
         if "AuthenticationError" in type(e).__name__ or ("Missing" in err_str and "API Key" in err_str):
@@ -1019,7 +1019,7 @@ async def chat_stream(req: ChatRequest):
     async def _run_and_collect():
         start = time.time()
         try:
-            response = await agent_app.run(req.message, conversation_history=history)
+            response = await agent_app.run(req.message, conversation_history=history, images=req.images)
             duration_ms = (time.time() - start) * 1000
             # Persist exchange
             new_history = list(history)

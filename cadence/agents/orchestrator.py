@@ -195,9 +195,11 @@ class Orchestrator:
         user_request: str,
         conversation_history: list[dict[str, str]] | None = None,
         session_id: str = "",
+        images: list[dict] | None = None,
     ) -> str:
         """Process a user request end-to-end."""
         self._session_id = session_id
+        self._images = images
         _start_time = time.time()
 
         # Check session budget before starting
@@ -230,6 +232,7 @@ class Orchestrator:
             result = await agent.run(
                 user_request,
                 conversation_history=self._conversation_history,
+                images=self._images,
             )
             self._session_tokens += agent._total_tokens
             return result
