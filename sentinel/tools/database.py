@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from pathlib import Path
 
@@ -10,6 +11,32 @@ from sentinel.tools.base import Tool
 
 # Statements that modify data or schema
 _WRITE_KEYWORDS = {"INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "REPLACE", "TRUNCATE"}
+
+# Regex to detect write operations even when hidden behind CTEs, comments, or
+# compound statements.  Strips SQL comments first, then checks all statement
+# boundaries for write keywords.
+_SQL_COMMENT_RE = re.compile(r"--[^\n]*|/\*.*?\*/", re.DOTALL)
+
+
+def _contains_write_operation(query: str) -> str | None:
+    """Return the first write keyword found in *query*, or None if read-only."""
+    # Strip comments so they can't hide write operations
+    cleaned = _SQL_COMMENT_RE.sub(" ", query)
+    # Split on semicolons to catch compound statements
+    for stmt in cleaned.split(";"):
+        tokens = stmt.strip().split()
+        if not tokens:
+            continue
+        word = tokens[0].upper()
+        if word in _WRITE_KEYWORDS:
+            return word
+        # Catch "WITH ... INSERT/UPDATE/DELETE" (CTE-based writes)
+        upper = stmt.upper()
+        if word == "WITH":
+            for kw in ("INSERT", "UPDATE", "DELETE"):
+                if kw in upper:
+                    return kw
+    return None
 
 
 class SqlQueryTool(Tool):
@@ -53,9 +80,9 @@ class SqlQueryTool(Tool):
         max_rows: int = 100,
     ) -> str:
         # Safety check for write operations
-        first_word = query.strip().split()[0].upper() if query.strip() else ""
-        if first_word in _WRITE_KEYWORDS and not allow_write:
-            return f"Write operation '{first_word}' blocked. Set allow_write=true to allow."
+        write_kw = _contains_write_operation(query)
+        if write_kw and not allow_write:
+            return f"Write operation '{write_kw}' blocked. Set allow_write=true to allow."
 
         if database != ":memory:":
             db_path = Path(database).expanduser()
@@ -68,7 +95,7 @@ class SqlQueryTool(Tool):
             cursor = conn.cursor()
             cursor.execute(query)
 
-            if first_word in _WRITE_KEYWORDS:
+            if write_kw:
                 conn.commit()
                 return f"OK — {cursor.rowcount} rows affected."
 
