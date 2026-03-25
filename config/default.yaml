@@ -81,6 +81,25 @@ prompt_evolution:
   max_active_modifications: 10        # Cap active modifications per role
   persist_dir: "./data/prompt_evolution.db"  # SQLite database for modifications
 
+mcp:
+  enabled: false                      # Master switch for MCP server connections
+  servers: {}
+  # Example: connect to MCP servers exposed by Cursor or other tools
+  # servers:
+  #   cursor-filesystem:
+  #     transport: "stdio"
+  #     command: "npx"
+  #     args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/project"]
+  #   cursor-sse:
+  #     transport: "sse"
+  #     url: "http://localhost:3000/sse"
+  #   custom-tools:
+  #     transport: "stdio"
+  #     command: "python"
+  #     args: ["-m", "my_mcp_server"]
+  #     env:
+  #       MY_API_KEY: "sk-..."
+
 logging:
   level: "INFO"                     # DEBUG | INFO | WARNING | ERROR
   trace_file: "./data/traces.jsonl" # Structured reasoning trace output
