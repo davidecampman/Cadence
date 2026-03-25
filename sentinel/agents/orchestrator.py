@@ -40,7 +40,8 @@ ROLES = {
             "You gather information by reading files, searching codebases, fetching web pages, "
             "and querying memory. You report findings clearly and factually."
         ),
-        allowed_tools=["read_file", "list_files", "search_files", "web_fetch", "memory_query"],
+        allowed_tools=["read_file", "list_files", "search_files", "web_fetch",
+                        "browse_web", "browser_extract", "memory_query"],
     ),
     "coder": AgentRole(
         name="coder",

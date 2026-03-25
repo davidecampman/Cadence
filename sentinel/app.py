@@ -29,6 +29,13 @@ from sentinel.tools.prompt_tools import (
 from sentinel.tools.scratchpad import ScratchReadTool, ScratchWriteTool
 from sentinel.tools.text_tools import DiffPatchTool, RegexReplaceTool, SummarizeTextTool
 from sentinel.tools.vision import ImageDescribeTool, ScreenshotTool
+from sentinel.tools.browser import (
+    BrowseWebTool,
+    BrowserClickTool,
+    BrowserExtractTool,
+    BrowserFormTool,
+    BrowserScreenshotTool,
+)
 from sentinel.tools.knowledge_tools import KBDeleteTool, KBIngestTool, KBListTool, KBSearchTool
 from sentinel.tools.web import WebFetchTool
 
@@ -85,6 +92,13 @@ class SentinelApp:
         # Web & HTTP
         registry.register(WebFetchTool())
         registry.register(HttpRequestTool())
+
+        # Browser (Playwright)
+        registry.register(BrowseWebTool())
+        registry.register(BrowserClickTool())
+        registry.register(BrowserFormTool())
+        registry.register(BrowserScreenshotTool())
+        registry.register(BrowserExtractTool())
 
         # Git
         registry.register(GitStatusTool())

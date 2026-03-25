@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -37,7 +39,12 @@ app = FastAPI(title="Sentinel", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -126,6 +133,12 @@ async def startup():
     agent_app = get_app()
     _original_log = agent_app.trace.log
     agent_app.trace.log = _patched_log
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    from sentinel.tools.browser import _shutdown_browser
+    await _shutdown_browser()
 
 
 async def _compress_history(
@@ -743,10 +756,28 @@ async def list_models(provider: str, tier: str | None = None):
 
 # --- Local file access endpoints ---
 
+# Directories that the file download/reveal endpoints are allowed to serve from.
+_ALLOWED_FILE_ROOTS = [
+    Path.cwd().resolve(),
+    Path(tempfile.gettempdir()).resolve(),
+]
+
+
+def _is_path_allowed(p: Path) -> bool:
+    """Return True if *p* falls under one of the allowed root directories."""
+    resolved = p.resolve()
+    return any(
+        resolved == root or str(resolved).startswith(str(root) + os.sep)
+        for root in _ALLOWED_FILE_ROOTS
+    )
+
+
 @app.get("/api/files/download")
 async def download_file(path: str = Query(..., description="Absolute path to the file")):
     """Serve a local file as a browser download."""
     p = Path(path).expanduser().resolve()
+    if not _is_path_allowed(p):
+        return {"error": "Access denied: path outside allowed directories"}, 403
     if not p.exists():
         return {"error": f"File not found: {path}"}, 404
     if not p.is_file():
@@ -762,6 +793,8 @@ async def download_file(path: str = Query(..., description="Absolute path to the
 async def reveal_file(path: str = Query(..., description="Path to reveal in file manager")):
     """Open the OS file manager to the directory containing the given file."""
     p = Path(path).expanduser().resolve()
+    if not _is_path_allowed(p):
+        return {"error": "Access denied: path outside allowed directories"}, 403
     target = p.parent if p.is_file() else p
     if not target.exists():
         return {"error": f"Directory not found: {target}"}

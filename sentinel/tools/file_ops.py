@@ -9,6 +9,15 @@ from pathlib import Path
 from sentinel.core.types import PermissionTier
 from sentinel.tools.base import Tool
 
+# Sensitive paths that file tools should never write to.
+_SENSITIVE_PATHS = {"/etc", "/usr", "/bin", "/sbin", "/boot", "/var", "/root", "/proc", "/sys"}
+
+
+def _is_write_safe(p: Path) -> bool:
+    """Return True if *p* is not inside a sensitive system directory."""
+    resolved = str(p.resolve())
+    return not any(resolved == s or resolved.startswith(s + "/") for s in _SENSITIVE_PATHS)
+
 
 class ReadFileTool(Tool):
     name = "read_file"
@@ -58,6 +67,8 @@ class WriteFileTool(Tool):
 
     async def execute(self, path: str, content: str) -> str:
         p = Path(path).expanduser()
+        if not _is_write_safe(p):
+            return f"Write blocked: path resolves inside a protected system directory ({p.resolve()})"
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content)
         abs_path = str(p.resolve())
