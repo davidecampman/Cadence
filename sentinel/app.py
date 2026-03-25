@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+
 from sentinel.core.config import Config, load_config
 from sentinel.core.trace import TraceLogger
 from sentinel.agents.orchestrator import Orchestrator
 from sentinel.knowledge.store import KnowledgeStore
 from sentinel.memory.store import MemoryStore
+from sentinel.mcp.client import MCPManager
+from sentinel.mcp.bridge import register_mcp_tools
 from sentinel.prompts.evolution import PromptEvolver
 from sentinel.prompts.store import PromptEvolutionStore
 from sentinel.skills.loader import SkillLoader
@@ -40,6 +44,9 @@ from sentinel.tools.knowledge_tools import KBDeleteTool, KBIngestTool, KBListToo
 from sentinel.tools.web import WebFetchTool
 
 
+logger = logging.getLogger(__name__)
+
+
 class SentinelApp:
     """Main application — bootstraps all components and provides the run interface."""
 
@@ -53,6 +60,7 @@ class SentinelApp:
         self.knowledge = KnowledgeStore()
         self.router = SmartRouter(self.config)
         self.skills = SkillLoader(self.config.skills.directories)
+        self.mcp_manager = MCPManager()
 
         # Initialize prompt evolution system
         if self.config.prompt_evolution.enabled:
@@ -155,6 +163,41 @@ class SentinelApp:
         ))
 
         return registry
+
+    async def connect_mcp_servers(self) -> int:
+        """Connect to configured MCP servers and register their tools.
+
+        Call this after __init__ (requires async). Returns the number of
+        MCP tools registered.
+        """
+        mcp_config = self.config.mcp
+        if not mcp_config.enabled or not mcp_config.servers:
+            return 0
+
+        total = 0
+        for name, server_cfg in mcp_config.servers.items():
+            if not server_cfg.enabled:
+                logger.info("MCP server '%s' is disabled, skipping", name)
+                continue
+            try:
+                await self.mcp_manager.add_server(
+                    name=name,
+                    transport=server_cfg.transport,
+                    command=server_cfg.command,
+                    args=server_cfg.args,
+                    env=server_cfg.env,
+                    url=server_cfg.url,
+                )
+            except Exception:
+                logger.error("Failed to connect MCP server '%s'", name, exc_info=True)
+                continue
+
+        total = register_mcp_tools(self.mcp_manager, self.tools)
+        return total
+
+    async def disconnect_mcp_servers(self) -> None:
+        """Cleanly shut down all MCP server connections."""
+        await self.mcp_manager.disconnect_all()
 
     async def run(
         self,

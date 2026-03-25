@@ -133,12 +133,16 @@ async def startup():
     agent_app = get_app()
     _original_log = agent_app.trace.log
     agent_app.trace.log = _patched_log
+    # Connect to configured MCP servers
+    await agent_app.connect_mcp_servers()
 
 
 @app.on_event("shutdown")
 async def shutdown():
     from sentinel.tools.browser import _shutdown_browser
     await _shutdown_browser()
+    agent_app = get_app()
+    await agent_app.disconnect_mcp_servers()
 
 
 async def _compress_history(

@@ -92,6 +92,22 @@ class PromptEvolutionConfig(BaseModel):
     persist_dir: str = "./data/prompt_evolution.db"  # SQLite database path
 
 
+class MCPServerConfig(BaseModel):
+    """Configuration for a single MCP server connection."""
+    transport: str = "stdio"              # "stdio" or "sse"
+    command: str | None = None            # For stdio: executable to launch
+    args: list[str] = Field(default_factory=list)  # For stdio: command arguments
+    env: dict[str, str] | None = None     # For stdio: environment variables
+    url: str | None = None                # For sse: server endpoint URL
+    enabled: bool = True                  # Toggle individual servers
+
+
+class MCPConfig(BaseModel):
+    """MCP (Model Context Protocol) integration settings."""
+    enabled: bool = False                 # Master switch for MCP
+    servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
+
+
 class Config(BaseModel):
     models: ModelsConfig = Field(default_factory=ModelsConfig)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
@@ -102,6 +118,7 @@ class Config(BaseModel):
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     prompt_evolution: PromptEvolutionConfig = Field(default_factory=PromptEvolutionConfig)
+    mcp: MCPConfig = Field(default_factory=MCPConfig)
 
 
 def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:

@@ -29,9 +29,14 @@ async def async_main(config_path: str | None = None):
     # Discover skills
     n_skills = app.discover_skills()
 
+    # Connect to MCP servers (if configured)
+    n_mcp = await app.connect_mcp_servers()
+
     print(BANNER)
     print(f"  Tools: {', '.join(app.tools.names())}")
     print(f"  Skills: {n_skills} loaded")
+    if n_mcp:
+        print(f"  MCP tools: {n_mcp} from {len(app.mcp_manager.clients)} server(s)")
     print(f"  Model (strong): {app.config.models.strong}")
     print(f"  Model (fast): {app.config.models.fast}")
     print()
