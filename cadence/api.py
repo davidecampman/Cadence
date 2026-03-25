@@ -394,6 +394,8 @@ async def put_config(req: ConfigUpdateRequest):
     # Update the live app's config reference AND propagate to sub-components
     agent_app.config = new_config
     agent_app.orchestrator.config = new_config
+    if agent_app.orchestrator.prompt_evolver:
+        agent_app.orchestrator.prompt_evolver.config = new_config
     agent_app.router = __import__(
         "cadence.routing.router", fromlist=["SmartRouter"]
     ).SmartRouter(new_config)
@@ -549,6 +551,8 @@ async def post_bedrock_keys(req: BedrockKeysRequest):
         new_config = _update_config({"models": {"bedrock": {"enabled": True}}})
         agent_app.config = new_config
         agent_app.orchestrator.config = new_config
+        if agent_app.orchestrator.prompt_evolver:
+            agent_app.orchestrator.prompt_evolver.config = new_config
 
     return {"status": "saved", "provider": "bedrock", "auth_type": req.auth_type}
 
@@ -572,6 +576,8 @@ async def remove_key(provider: str):
                 new_config = _update_config({"models": {"bedrock": {"enabled": False}}})
                 agent_app.config = new_config
                 agent_app.orchestrator.config = new_config
+                if agent_app.orchestrator.prompt_evolver:
+                    agent_app.orchestrator.prompt_evolver.config = new_config
         return {"status": "deleted" if deleted else "not_found", "provider": provider}
 
     deleted = _delete_key(provider)
