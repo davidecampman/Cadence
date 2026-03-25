@@ -75,6 +75,12 @@ skills:
     - "./skills"                    # Local skills directory
   auto_discover: true               # Scan for SKILL.md files on startup
 
+prompt_evolution:
+  enabled: true                       # Master switch for self-modifying prompts
+  reflect_after_task: true            # Trigger LLM reflection after each task
+  max_active_modifications: 10        # Cap active modifications per role
+  persist_dir: "./data/prompt_evolution.db"  # SQLite database for modifications
+
 logging:
   level: "INFO"                     # DEBUG | INFO | WARNING | ERROR
   trace_file: "./data/traces.jsonl" # Structured reasoning trace output
