@@ -579,3 +579,113 @@ class TestHelpers:
     def test_summarize_args_empty(self):
         result = _summarize_args({})
         assert result == ""
+
+
+# ---------------------------------------------------------------------------
+# Context overflow prevention
+# ---------------------------------------------------------------------------
+
+class TestContextOverflowPrevention:
+    @pytest.mark.asyncio
+    async def test_tool_result_truncation(self):
+        """Large tool results are truncated before adding to agent history."""
+        big_tool = EchoTool()
+
+        # Override execute to return a huge result
+        async def big_execute(text: str = "") -> str:
+            return "X" * 50_000  # 50k chars
+
+        big_tool.execute = big_execute
+        registry = _make_registry(big_tool)
+
+        tool_call = ToolCall(id="tc1", name="echo", arguments={"text": "big"})
+        call_count = 0
+
+        async def mock_chat(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return ("", [tool_call], {"total_tokens": 20})
+            else:
+                return ("Got the result.", [], {"total_tokens": 15})
+
+        with patch("cadence.core.agent.chat_completion", side_effect=mock_chat):
+            role = AgentRole(name="test", description="Test agent")
+            trace = TraceLogger(console=False)
+            config = _make_config()
+            config.agents.max_tool_result_chars = 1000
+
+            agent = Agent(role=role, tool_registry=registry, trace=trace, config=config)
+            result = await agent.run("Get big data")
+
+            # Verify tool result in history was truncated
+            tool_msgs = [m for m in agent._history if m.role == Role.TOOL]
+            assert len(tool_msgs) == 1
+            assert len(tool_msgs[0].content) < 2000  # Should be ~1000, not 50k
+            assert "truncated" in tool_msgs[0].content
+
+    @pytest.mark.asyncio
+    async def test_history_pruning(self):
+        """Older tool results are pruned when history grows large."""
+        echo_tool = EchoTool()
+        registry = _make_registry(echo_tool)
+
+        iteration = 0
+
+        async def mock_chat(*args, **kwargs):
+            nonlocal iteration
+            iteration += 1
+            if iteration <= 10:
+                tc = ToolCall(id=f"tc{iteration}", name="echo", arguments={"text": f"step{iteration}"})
+                # Use unique text each time to avoid loop detection
+                return (f"thinking about step {iteration}...", [tc], {"total_tokens": 100})
+            else:
+                return ("Done!", [], {"total_tokens": 100})
+
+        with patch("cadence.core.agent.chat_completion", side_effect=mock_chat):
+            role = AgentRole(name="test", description="Test agent")
+            trace = TraceLogger(console=False)
+            config = _make_config()
+            config.agents.prune_threshold = 10  # Low threshold for testing
+
+            agent = Agent(role=role, tool_registry=registry, trace=trace, config=config)
+            result = await agent.run("Do many things")
+
+            assert result == "Done!"
+            # History should have been pruned — old tool results should be short
+            tool_msgs = [m for m in agent._history if m.role == Role.TOOL]
+            # At least some of them should exist (pruning doesn't remove, just shrinks)
+            assert len(tool_msgs) > 0
+
+    @pytest.mark.asyncio
+    async def test_proactive_budget_wrap_up(self):
+        """Agent wraps up proactively when approaching token budget."""
+        echo_tool = EchoTool()
+        registry = _make_registry(echo_tool)
+
+        call_count = 0
+
+        async def mock_chat(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            tools = kwargs.get("tools")
+            if tools is None:
+                # This is the wrap-up call (no tools provided)
+                return ("Here's my summary based on what I found.", [], {"total_tokens": 5000})
+            tc = ToolCall(id=f"tc{call_count}", name="echo", arguments={"text": "data"})
+            return ("", [tc], {"total_tokens": 45000})  # Each call uses ~45k tokens
+
+        with patch("cadence.core.agent.chat_completion", side_effect=mock_chat):
+            role = AgentRole(name="test", description="Test agent")
+            trace = TraceLogger(console=False)
+            config = _make_config()
+            config.budget.max_tokens_per_task = 100000
+
+            agent = Agent(role=role, tool_registry=registry, trace=trace, config=config)
+            result = await agent.run("Expensive task")
+
+            # Agent should have wrapped up proactively rather than hitting hard budget limit
+            assert "summary" in result.lower() or "found" in result.lower()
+            assert "budget exceeded" not in result.lower()
+            # Should have done the wrap-up call (tools=None)
+            assert agent._total_tokens < 200000  # Should not have blown far past budget

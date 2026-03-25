@@ -104,6 +104,50 @@ class Agent:
                 parts.append(prompt)
         return "\n".join(parts)
 
+    def _truncate_result(self, text: str) -> str:
+        """Truncate a tool result if it exceeds the configured limit."""
+        limit = self.config.agents.max_tool_result_chars
+        if len(text) <= limit:
+            return text
+        # Keep the beginning and end for context, with a truncation marker
+        keep_head = int(limit * 0.7)
+        keep_tail = limit - keep_head - 100  # room for marker
+        return (
+            text[:keep_head]
+            + f"\n\n... [truncated {len(text) - keep_head - keep_tail:,} chars] ...\n\n"
+            + text[-keep_tail:]
+        )
+
+    def _prune_history(self) -> None:
+        """Shrink older tool results when history grows too large.
+
+        Keeps the system prompt, conversation history, and the most recent
+        tool exchanges intact.  Older tool-result messages are truncated to
+        a short summary so they stop inflating context on every LLM call.
+        """
+        threshold = self.config.agents.prune_threshold
+        if len(self._history) <= threshold:
+            return
+
+        # Keep the first message (system prompt) and the last 20 messages
+        # untouched.  Everything in between: shrink TOOL messages.
+        keep_tail = 20
+        if len(self._history) <= keep_tail + 1:
+            return
+
+        prune_end = len(self._history) - keep_tail
+        for i in range(1, prune_end):
+            msg = self._history[i]
+            if msg.role == Role.TOOL and msg.content and len(msg.content) > 500:
+                # Replace with a short summary preserving the tool name
+                prefix = msg.content[:200]
+                self._history[i] = Message(
+                    role=Role.TOOL,
+                    content=f"{prefix}\n... [pruned — full output was {len(msg.content):,} chars]",
+                    tool_call_id=msg.tool_call_id,
+                    name=msg.name,
+                )
+
     def _check_loop_detection(self) -> bool:
         """Detect if the agent is stuck in a loop by checking recent outputs."""
         window = self.config.agents.loop_detection_window
@@ -177,7 +221,7 @@ class Agent:
                 await self._maybe_reflect(task, result, max_iter)
                 return result
 
-            # Budget check
+            # Budget check — hard stop if exceeded
             if self._total_tokens >= self.config.budget.max_tokens_per_task:
                 self.trace.error(self.id, f"Token budget exceeded: {self._total_tokens}")
                 self._errors.append("Token budget exceeded")
@@ -186,6 +230,39 @@ class Agent:
                 )
                 await self._maybe_reflect(task, result, max_iter)
                 return result
+
+            # Proactive budget check — if approaching the limit, do one final
+            # toolless LLM call to produce a summary rather than blowing the budget.
+            budget_limit = self.config.budget.max_tokens_per_task
+            if self._iterations > 1 and self._total_tokens > 0:
+                avg_tokens_per_iter = self._total_tokens / (self._iterations - 1)
+                projected = self._total_tokens + avg_tokens_per_iter
+                if projected > budget_limit * 0.95:
+                    self.trace.thought(
+                        self.id,
+                        f"Approaching budget ({self._total_tokens:,}/{budget_limit:,}), "
+                        f"avg {avg_tokens_per_iter:,.0f}/iter — final summary call",
+                    )
+                    # One last call without tools so the LLM wraps up
+                    self._history.append(Message(
+                        role=Role.USER,
+                        content=(
+                            "[System: You are approaching your token budget. "
+                            "Please provide your best final answer now with what you have so far. "
+                            "Do not request any more tools.]"
+                        ),
+                    ))
+                    text, _, usage = await chat_completion(
+                        model=self.model,
+                        messages=self._history,
+                        tools=None,  # No tools — force a text response
+                        bedrock_config=self.config.models.bedrock if self.config.models.bedrock.enabled else None,
+                    )
+                    self._total_tokens += usage.get("total_tokens", 0)
+                    self._history.append(Message(role=Role.ASSISTANT, content=text))
+                    self.trace.result(self.id, f"Budget-limited response ({self._iterations} iterations)")
+                    await self._maybe_reflect(task, text, max_iter)
+                    return text
 
             # Get available tool definitions for this agent's permission tier
             tool_defs = scoped_tools.definitions(
@@ -227,7 +304,7 @@ class Agent:
                     self._errors.append(result_text)
                 else:
                     result = await tool.run(tc.id, tc.arguments)
-                    result_text = result.output
+                    result_text = self._truncate_result(result.output)
                     if not result.success:
                         self.trace.error(self.id, f"Tool {tc.name} failed: {result_text[:200]}")
                         self._errors.append(f"Tool {tc.name} failed: {result_text[:200]}")
@@ -238,6 +315,9 @@ class Agent:
                     tool_call_id=tc.id,
                     name=tc.name,
                 ))
+
+            # Prune older tool results to keep context from growing unboundedly
+            self._prune_history()
 
         # Hit max iterations
         self.trace.error(self.id, f"Max iterations ({max_iter}) reached")

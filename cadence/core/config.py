@@ -42,6 +42,8 @@ class AgentsConfig(BaseModel):
     max_parallel: int = 4
     loop_detection_window: int = 5
     max_iterations_per_task: int = 25
+    max_tool_result_chars: int = 16_000  # Truncate tool outputs beyond this in agent history
+    prune_threshold: int = 40            # Prune older tool results when history exceeds this many messages
 
 
 class MemoryConfig(BaseModel):
