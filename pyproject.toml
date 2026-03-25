@@ -1,5 +1,5 @@
 [project]
-name = "sentinel"
+name = "cadence"
 version = "0.1.0"
 description = "A model-agnostic multi-agent framework with structured planning, tiered memory, and parallel task execution."
 requires-python = ">=3.11"
@@ -33,11 +33,11 @@ dev = [
 ]
 
 [project.scripts]
-sentinel = "sentinel.cli:main"
-sentinel-server = "sentinel.server:main"
+cadence = "cadence.cli:main"
+cadence-server = "cadence.server:main"
 
 [tool.setuptools.packages.find]
-include = ["sentinel*"]
+include = ["cadence*"]
 
 [tool.ruff]
 line-length = 100

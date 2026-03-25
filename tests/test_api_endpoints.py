@@ -5,9 +5,9 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-import sentinel.api as api_module
-from sentinel.api import app
-from sentinel.storage.chat_store import ChatStore
+import cadence.api as api_module
+from cadence.api import app
+from cadence.storage.chat_store import ChatStore
 
 
 # ---------------------------------------------------------------------------
@@ -22,7 +22,7 @@ def chat_store(tmp_path):
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch, chat_store):
-    """Create a TestClient with isolated chat store (no SentinelApp needed for most endpoints)."""
+    """Create a TestClient with isolated chat store (no CadenceApp needed for most endpoints)."""
     monkeypatch.setattr(api_module, "_chat_store", None)
     monkeypatch.setattr(api_module, "get_chat_store", lambda: chat_store)
     return TestClient(app, raise_server_exceptions=False)

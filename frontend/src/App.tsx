@@ -54,7 +54,7 @@ interface Chat {
 
 function loadChatsFromLocalStorage(): Chat[] {
   try {
-    const raw = localStorage.getItem('sentinel-chats');
+    const raw = localStorage.getItem('cadence-chats');
     return raw ? JSON.parse(raw) : [];
   } catch {
     return [];
@@ -62,7 +62,7 @@ function loadChatsFromLocalStorage(): Chat[] {
 }
 
 function saveChatsToLocalStorage(chats: Chat[]) {
-  localStorage.setItem('sentinel-chats', JSON.stringify(chats));
+  localStorage.setItem('cadence-chats', JSON.stringify(chats));
 }
 
 function chatTitle(messages: ChatMessage[]): string {
@@ -121,7 +121,7 @@ function renderMessageContent(content: string) {
 
 function App() {
   const [lightMode, setLightMode] = useState(() => {
-    const saved = localStorage.getItem('sentinel-theme');
+    const saved = localStorage.getItem('cadence-theme');
     return saved === 'light';
   });
   const [view, setView] = useState<View>('chat');
@@ -156,7 +156,7 @@ function App() {
   const [skillUploading, setSkillUploading] = useState(false);
   const [skillMessage, setSkillMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [disabledTools, setDisabledTools] = useState<Set<string>>(() => {
-    const saved = localStorage.getItem('sentinel-disabled-tools');
+    const saved = localStorage.getItem('cadence-disabled-tools');
     return saved ? new Set(JSON.parse(saved)) : new Set();
   });
   const [configTab, setConfigTab] = useState<'providers' | 'budget' | 'agents' | 'memory' | 'execution' | 'conversation'>('providers');
@@ -305,7 +305,7 @@ function App() {
   // Sync theme class on body
   useEffect(() => {
     document.body.classList.toggle('light-mode', lightMode);
-    localStorage.setItem('sentinel-theme', lightMode ? 'light' : 'dark');
+    localStorage.setItem('cadence-theme', lightMode ? 'light' : 'dark');
   }, [lightMode]);
 
   // Check health on mount
@@ -682,7 +682,7 @@ function App() {
       {/* Sidebar */}
       <nav className="sidebar">
         <div className="sidebar-header">
-          <h1>Sentinel</h1>
+          <h1>Cadence</h1>
           <div className="version">v0.1.0 — Multi-Agent Framework</div>
         </div>
 
@@ -789,7 +789,7 @@ function App() {
               {messages.length === 0 && !loading ? (
                 <div className="chat-welcome">
                   <div className="logo">&#x1F916;</div>
-                  <h2>Sentinel</h2>
+                  <h2>Cadence</h2>
                   <p>
                     A model-agnostic multi-agent framework with structured planning,
                     tiered memory, and parallel task execution.
@@ -815,7 +815,7 @@ function App() {
                           {msg.role === 'user' ? 'U' : 'A'}
                         </div>
                         <span className="message-sender">
-                          {msg.role === 'user' ? 'You' : 'Sentinel'}
+                          {msg.role === 'user' ? 'You' : 'Cadence'}
                         </span>
                         <span className="message-time">{formatTime(msg.timestamp)}</span>
                       </div>
@@ -853,7 +853,7 @@ function App() {
                     <div className="typing-indicator">
                       <div className="message-header">
                         <div className="message-avatar agent">A</div>
-                        <span className="message-sender">Sentinel</span>
+                        <span className="message-sender">Cadence</span>
                       </div>
                       <div className="typing-dots">
                         <span />
@@ -885,7 +885,7 @@ function App() {
                 <textarea
                   ref={inputRef}
                   className="chat-input"
-                  placeholder="Ask Sentinel anything..."
+                  placeholder="Ask Cadence anything..."
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
@@ -1221,7 +1221,7 @@ function App() {
                 <div className="config-section">
                   <h3>Model Tiers</h3>
                   <p className="config-hint">
-                    Sentinel routes tasks to different models based on complexity.
+                    Cadence routes tasks to different models based on complexity.
                   </p>
                   <div className="config-field">
                     <label>
@@ -1533,7 +1533,7 @@ function App() {
                                       next.add(t.name);
                                     }
                                     setDisabledTools(next);
-                                    localStorage.setItem('sentinel-disabled-tools', JSON.stringify([...next]));
+                                    localStorage.setItem('cadence-disabled-tools', JSON.stringify([...next]));
                                   }}
                                 />
                                 <span className="tool-toggle-name">{t.name}</span>

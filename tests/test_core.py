@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from sentinel.core.types import (
+from cadence.core.types import (
     AgentRole,
     Message,
     PermissionTier,
@@ -15,13 +15,13 @@ from sentinel.core.types import (
     ToolDefinition,
     TraceStep,
 )
-from sentinel.core.config import Config, BedrockConfig, load_config
-from sentinel.core.llm import supports_native_tools, _is_bedrock_model, _to_bedrock_model, _region_to_inference_prefix
-from sentinel.core.trace import TraceLogger
-from sentinel.tools.base import Tool, ToolRegistry
-from sentinel.skills.loader import SkillLoader, SkillDefinition
-from sentinel.routing.router import ModelStats, SmartRouter
-from sentinel.tools.code_execution import (
+from cadence.core.config import Config, BedrockConfig, load_config
+from cadence.core.llm import supports_native_tools, _is_bedrock_model, _to_bedrock_model, _region_to_inference_prefix
+from cadence.core.trace import TraceLogger
+from cadence.tools.base import Tool, ToolRegistry
+from cadence.skills.loader import SkillLoader, SkillDefinition
+from cadence.routing.router import ModelStats, SmartRouter
+from cadence.tools.code_execution import (
     _build_resource_limits,
     _check_blocked,
     _shell_quote,

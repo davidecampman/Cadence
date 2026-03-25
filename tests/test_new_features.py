@@ -18,10 +18,10 @@ import pytest
 
 
 class TestMessageBus:
-    """Tests for sentinel.core.message_bus."""
+    """Tests for cadence.core.message_bus."""
 
     def _make_bus(self):
-        from sentinel.core.message_bus import MessageBus
+        from cadence.core.message_bus import MessageBus
         return MessageBus(history_limit=50)
 
     @pytest.mark.asyncio
@@ -162,7 +162,7 @@ class TestMessageBus:
 
     @pytest.mark.asyncio
     async def test_priority_preserved(self):
-        from sentinel.core.message_bus import MessagePriority
+        from cadence.core.message_bus import MessagePriority
         bus = self._make_bus()
         msg = await bus.publish(
             topic="urgent-topic",
@@ -194,11 +194,11 @@ class TestMessageBus:
 
 
 class TestStreaming:
-    """Tests for sentinel.core.streaming."""
+    """Tests for cadence.core.streaming."""
 
     @pytest.mark.asyncio
     async def test_stream_collector_basic(self):
-        from sentinel.core.streaming import StreamCollector
+        from cadence.core.streaming import StreamCollector
         collector = StreamCollector()
 
         await collector.emit_token("Hello")
@@ -218,7 +218,7 @@ class TestStreaming:
 
     @pytest.mark.asyncio
     async def test_stream_event_sse_format(self):
-        from sentinel.core.streaming import StreamEvent
+        from cadence.core.streaming import StreamEvent
         event = StreamEvent(event="token", data={"token": "hi"})
         sse = event.to_sse()
         assert sse.startswith("event: token\n")
@@ -227,7 +227,7 @@ class TestStreaming:
 
     @pytest.mark.asyncio
     async def test_stream_collector_error(self):
-        from sentinel.core.streaming import StreamCollector
+        from cadence.core.streaming import StreamCollector
         collector = StreamCollector()
 
         await collector.emit_error("Something went wrong")
@@ -242,7 +242,7 @@ class TestStreaming:
 
     @pytest.mark.asyncio
     async def test_stream_collector_all_event_types(self):
-        from sentinel.core.streaming import StreamCollector
+        from cadence.core.streaming import StreamCollector
         collector = StreamCollector()
 
         await collector.emit_thinking("Analyzing...", agent_id="a1")
@@ -269,11 +269,11 @@ class TestStreaming:
 
 
 class TestCheckpoints:
-    """Tests for sentinel.core.checkpoint."""
+    """Tests for cadence.core.checkpoint."""
 
     @pytest.mark.asyncio
     async def test_request_and_approve(self):
-        from sentinel.core.checkpoint import CheckpointManager, CheckpointStatus
+        from cadence.core.checkpoint import CheckpointManager, CheckpointStatus
         mgr = CheckpointManager()
 
         async def _approve_after_delay():
@@ -295,7 +295,7 @@ class TestCheckpoints:
 
     @pytest.mark.asyncio
     async def test_request_and_reject(self):
-        from sentinel.core.checkpoint import CheckpointManager
+        from cadence.core.checkpoint import CheckpointManager
         mgr = CheckpointManager()
 
         async def _reject_after_delay():
@@ -316,7 +316,7 @@ class TestCheckpoints:
 
     @pytest.mark.asyncio
     async def test_checkpoint_timeout(self):
-        from sentinel.core.checkpoint import CheckpointManager
+        from cadence.core.checkpoint import CheckpointManager
         mgr = CheckpointManager()
 
         approved, response = await mgr.request_approval(
@@ -329,7 +329,7 @@ class TestCheckpoints:
         assert "expired" in response.lower()
 
     def test_get_all_checkpoints(self):
-        from sentinel.core.checkpoint import CheckpointManager, Checkpoint, CheckpointStatus
+        from cadence.core.checkpoint import CheckpointManager, Checkpoint, CheckpointStatus
         mgr = CheckpointManager()
         # Manually add some checkpoints
         cp1 = Checkpoint(
@@ -351,7 +351,7 @@ class TestCheckpoints:
         assert pending[0].title == "Test 2"
 
     def test_resolve_nonexistent(self):
-        from sentinel.core.checkpoint import CheckpointManager
+        from cadence.core.checkpoint import CheckpointManager
         mgr = CheckpointManager()
         result = mgr.resolve("nonexistent", approved=True)
         assert result is None
@@ -363,14 +363,14 @@ class TestCheckpoints:
 
 
 class TestLearning:
-    """Tests for sentinel.learning.store."""
+    """Tests for cadence.learning.store."""
 
     def _make_store(self, tmp_path):
-        from sentinel.learning.store import LearningStore
+        from cadence.learning.store import LearningStore
         return LearningStore(db_path=str(tmp_path / "test_learning.db"))
 
     def test_record_and_get_stats(self, tmp_path):
-        from sentinel.learning.store import StrategyRecord, OutcomeRating
+        from cadence.learning.store import StrategyRecord, OutcomeRating
         store = self._make_store(tmp_path)
 
         store.record(StrategyRecord(
@@ -398,7 +398,7 @@ class TestLearning:
         assert stats["by_task_type"]["code_generation"]["successes"] == 2
 
     def test_get_insights(self, tmp_path):
-        from sentinel.learning.store import StrategyRecord, OutcomeRating
+        from cadence.learning.store import StrategyRecord, OutcomeRating
         store = self._make_store(tmp_path)
 
         for i in range(5):
@@ -430,7 +430,7 @@ class TestLearning:
         assert store.classify_task("Something random") == "general"
 
     def test_get_best_tools(self, tmp_path):
-        from sentinel.learning.store import StrategyRecord, OutcomeRating
+        from cadence.learning.store import StrategyRecord, OutcomeRating
         store = self._make_store(tmp_path)
 
         store.record(StrategyRecord(
@@ -463,10 +463,10 @@ class TestLearning:
 
 
 class TestKnowledgeGraph:
-    """Tests for sentinel.knowledge.graph."""
+    """Tests for cadence.knowledge.graph."""
 
     def _make_graph(self, tmp_path):
-        from sentinel.knowledge.graph import KnowledgeGraph
+        from cadence.knowledge.graph import KnowledgeGraph
         return KnowledgeGraph(persist_path=str(tmp_path / "test_graph.json"))
 
     def test_add_entity(self, tmp_path):
@@ -590,7 +590,7 @@ class TestKnowledgeGraph:
         assert "class" in stats["entity_types"]
 
     def test_persistence(self, tmp_path):
-        from sentinel.knowledge.graph import KnowledgeGraph
+        from cadence.knowledge.graph import KnowledgeGraph
         path = str(tmp_path / "persist_test.json")
 
         g1 = KnowledgeGraph(persist_path=path)
@@ -610,10 +610,10 @@ class TestKnowledgeGraph:
 
 
 class TestMultiModal:
-    """Tests for sentinel.core.multimodal."""
+    """Tests for cadence.core.multimodal."""
 
     def test_supports_vision(self):
-        from sentinel.core.multimodal import supports_vision
+        from cadence.core.multimodal import supports_vision
         assert supports_vision("claude-3-opus-20240229") is True
         assert supports_vision("claude-sonnet-4-5-20250514") is True
         assert supports_vision("gpt-4o") is True
@@ -623,7 +623,7 @@ class TestMultiModal:
 
     def test_image_input_from_base64(self):
         import base64
-        from sentinel.core.multimodal import ImageInput
+        from cadence.core.multimodal import ImageInput
         # Create a tiny test image (1x1 PNG)
         png_data = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100).decode()
         img = ImageInput.from_base64(png_data, media_type="image/png")
@@ -633,21 +633,21 @@ class TestMultiModal:
 
     def test_image_input_from_data_url(self):
         import base64
-        from sentinel.core.multimodal import ImageInput
+        from cadence.core.multimodal import ImageInput
         raw = base64.b64encode(b"fake-image-data").decode()
         data_url = f"data:image/jpeg;base64,{raw}"
         img = ImageInput.from_base64(data_url)
         assert img.media_type == "image/jpeg"
 
     def test_image_input_from_url(self):
-        from sentinel.core.multimodal import ImageInput
+        from cadence.core.multimodal import ImageInput
         img = ImageInput.from_url("https://example.com/photo.jpg")
         assert img.media_type == "image/url"
         assert img.source == "https://example.com/photo.jpg"
 
     def test_content_block_base64(self):
         import base64
-        from sentinel.core.multimodal import ImageInput
+        from cadence.core.multimodal import ImageInput
         img = ImageInput(
             data=b"fake-data",
             media_type="image/png",
@@ -658,19 +658,19 @@ class TestMultiModal:
         assert block["source"]["media_type"] == "image/png"
 
     def test_content_block_url(self):
-        from sentinel.core.multimodal import ImageInput
+        from cadence.core.multimodal import ImageInput
         img = ImageInput.from_url("https://example.com/img.png")
         block = img.to_content_block()
         assert block["type"] == "image_url"
         assert block["image_url"]["url"] == "https://example.com/img.png"
 
     def test_build_multimodal_content_text_only(self):
-        from sentinel.core.multimodal import build_multimodal_content
+        from cadence.core.multimodal import build_multimodal_content
         result = build_multimodal_content("Hello world")
         assert result == "Hello world"  # Plain string, backward compatible
 
     def test_build_multimodal_content_with_images(self):
-        from sentinel.core.multimodal import build_multimodal_content, ImageInput
+        from cadence.core.multimodal import build_multimodal_content, ImageInput
         img = ImageInput(data=b"data", media_type="image/png")
         result = build_multimodal_content("Describe this image", images=[img])
         assert isinstance(result, list)
@@ -680,7 +680,7 @@ class TestMultiModal:
         assert result[1]["text"] == "Describe this image"
 
     def test_image_input_file_not_found(self):
-        from sentinel.core.multimodal import ImageInput
+        from cadence.core.multimodal import ImageInput
         with pytest.raises(FileNotFoundError):
             ImageInput.from_file("/nonexistent/image.png")
 
@@ -694,7 +694,7 @@ class TestNewConfig:
     """Tests for the new configuration sections."""
 
     def test_config_has_new_sections(self):
-        from sentinel.core.config import Config
+        from cadence.core.config import Config
         config = Config()
         assert config.message_bus.enabled is True
         assert config.message_bus.history_limit == 100
@@ -706,7 +706,7 @@ class TestNewConfig:
         assert config.multimodal.max_images_per_message == 5
 
     def test_config_defaults_can_be_overridden(self):
-        from sentinel.core.config import Config
+        from cadence.core.config import Config
         config = Config(
             message_bus={"enabled": False},
             checkpoints={"default_timeout": 60.0},
@@ -724,7 +724,7 @@ class TestMessageContentBlocks:
     """Tests for multi-modal Message content_blocks."""
 
     def test_message_with_content_blocks(self):
-        from sentinel.core.types import Message, Role
+        from cadence.core.types import Message, Role
         msg = Message(
             role=Role.USER,
             content="Describe this image",
@@ -737,6 +737,6 @@ class TestMessageContentBlocks:
         assert len(msg.content_blocks) == 2
 
     def test_message_without_content_blocks(self):
-        from sentinel.core.types import Message, Role
+        from cadence.core.types import Message, Role
         msg = Message(role=Role.USER, content="Plain text")
         assert msg.content_blocks is None

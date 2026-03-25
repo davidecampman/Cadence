@@ -1,8 +1,8 @@
-# Sentinel
+# Cadence
 
 A model-agnostic multi-agent framework with structured planning, tiered memory, and parallel task execution.
 
-Sentinel enables autonomous agents to break down complex tasks into dependency graphs, delegate work to specialist agents, and coordinate results — all while maintaining persistent memory and reasoning traces.
+Cadence enables autonomous agents to break down complex tasks into dependency graphs, delegate work to specialist agents, and coordinate results — all while maintaining persistent memory and reasoning traces.
 
 ## Architecture
 
@@ -308,7 +308,7 @@ flowchart TD
     subgraph Entities
         E1[function:parse_config]
         E2[class:ConfigManager]
-        E3[module:sentinel.core]
+        E3[module:cadence.core]
         E4[file:config.py]
         E5[concept:configuration]
     end
@@ -340,7 +340,7 @@ flowchart TD
 
 ```mermaid
 graph LR
-    subgraph sentinel/core
+    subgraph cadence/core
         agent[agent.py<br/>Think→Act loop]
         config[config.py<br/>YAML + env vars]
         llm[llm.py<br/>LiteLLM wrapper]
@@ -353,11 +353,11 @@ graph LR
         multimodal[multimodal.py<br/>Vision support]
     end
 
-    subgraph sentinel/agents
+    subgraph cadence/agents
         orch[orchestrator.py<br/>DAG execution]
     end
 
-    subgraph sentinel/tools
+    subgraph cadence/tools
         base[base.py — Registry]
         file_ops[file_ops.py]
         code_exec[code_execution.py]
@@ -375,34 +375,34 @@ graph LR
         other[+ 5 more tools]
     end
 
-    subgraph sentinel/memory
+    subgraph cadence/memory
         memstore[store.py<br/>ChromaDB + decay]
     end
 
-    subgraph sentinel/knowledge
+    subgraph cadence/knowledge
         kbstore[store.py<br/>Document search]
         parsers[parsers.py<br/>PDF/DOCX/email]
         kg[graph.py<br/>Knowledge graph]
     end
 
-    subgraph sentinel/learning
+    subgraph cadence/learning
         learn_store[store.py<br/>Strategy tracking]
     end
 
-    subgraph sentinel/prompts
+    subgraph cadence/prompts
         prompt_store[store.py<br/>Modification DB]
         evolution[evolution.py<br/>LLM reflection]
     end
 
-    subgraph sentinel/routing
+    subgraph cadence/routing
         router[router.py<br/>Model selection]
     end
 
-    subgraph sentinel/skills
+    subgraph cadence/skills
         loader[loader.py<br/>SKILL.md parser]
     end
 
-    subgraph sentinel/storage
+    subgraph cadence/storage
         chat_store[chat_store.py<br/>SQLite persistence]
     end
 
@@ -496,7 +496,7 @@ export ANTHROPIC_API_KEY="your-key-here"
 ### Run the CLI
 
 ```bash
-sentinel
+cadence
 ```
 
 Commands: `/skills`, `/trace`, `/config`, `/quit`
@@ -504,7 +504,7 @@ Commands: `/skills`, `/trace`, `/config`, `/quit`
 ### Run the API Server
 
 ```bash
-sentinel-server
+cadence-server
 ```
 
 This serves the REST API at `http://localhost:8000/api`, WebSocket at `ws://localhost:8000/ws`, and the React frontend at `http://localhost:8000`.
@@ -512,7 +512,7 @@ This serves the REST API at `http://localhost:8000/api`, WebSocket at `ws://loca
 ## Project Structure
 
 ```
-sentinel/
+cadence/
 ├── agents/          # Multi-agent orchestration and task DAG execution
 ├── core/            # Agent loop, config, LLM, keystore, message bus, streaming, checkpoints, multi-modal
 ├── knowledge/       # Knowledge base ingestion, document parsing, knowledge graph, and semantic search
@@ -539,9 +539,9 @@ tests/               # Unit and integration tests
 Configuration lives in `config/default.yaml` and can be overridden with environment variables:
 
 ```bash
-SENTINEL_MODELS_STRONG=gpt-4o
-SENTINEL_AGENTS_MAX_DEPTH=3
-SENTINEL_MEMORY_DECAY_RATE=0.1
+CADENCE_MODELS_STRONG=gpt-4o
+CADENCE_AGENTS_MAX_DEPTH=3
+CADENCE_MEMORY_DECAY_RATE=0.1
 ```
 
 Key settings:
