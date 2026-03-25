@@ -238,27 +238,12 @@ function App() {
             setActiveChatId(fullChats[0]?.id ?? null);
           }
         } else {
-          // No server chats — migrate any localStorage chats to the backend
-          const local = loadChatsFromLocalStorage();
-          for (const lc of local) {
-            try {
-              await apiCreateChat(lc.id, lc.title, lc.createdAt / 1000);
-              if (lc.sessionId) {
-                await apiUpdateChat(lc.id, { session_id: lc.sessionId });
-              }
-              for (const msg of lc.messages) {
-                await addChatMessage(lc.id, {
-                  id: msg.id,
-                  role: msg.role,
-                  content: msg.content,
-                  timestamp: msg.timestamp,
-                  duration_ms: msg.duration_ms,
-                  trace_steps: msg.trace_steps as Record<string, unknown>[] | undefined,
-                });
-              }
-            } catch {
-              // Skip individual migration errors
-            }
+          // Server is online but has no chats — fresh database.
+          // Clear stale localStorage to avoid showing old conversations.
+          if (!cancelled) {
+            setChats([]);
+            setActiveChatId(null);
+            localStorage.removeItem('cadence-chats');
           }
         }
         if (!cancelled) setBackendReady(true);

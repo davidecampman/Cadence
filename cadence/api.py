@@ -14,7 +14,7 @@ from pathlib import Path
 import platform
 import subprocess
 
-from fastapi import FastAPI, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -53,6 +53,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def no_cache_api_responses(request: Request, call_next):
+    """Prevent browsers from caching API responses."""
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+    return response
+
 
 # --- Global app instance ---
 _agent_app: CadenceApp | None = None
