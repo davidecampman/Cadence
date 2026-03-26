@@ -5,7 +5,7 @@ description = "A model-agnostic multi-agent framework with structured planning, 
 requires-python = ">=3.11"
 license = "MIT"
 dependencies = [
-    "litellm>=1.40.0",
+    "litellm>=1.40.0,!=1.82.7,!=1.82.8",
     "chromadb>=0.5.0",
     "pyyaml>=6.0",
     "pydantic>=2.0",
