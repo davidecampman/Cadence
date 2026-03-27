@@ -6,6 +6,8 @@ import pytest
 
 from cadence.core.types import (
     AgentRole,
+    ConditionalDef,
+    LoopDef,
     Message,
     PermissionTier,
     Role,
@@ -525,6 +527,59 @@ def test_skill_get_skill_prompt_nonexistent(tmp_path):
     loader = SkillLoader(directories=[str(tmp_path)])
     loader.discover()
     assert loader.get_skill_prompt("nope") is None
+
+
+# --- Conditional & Loop types ---
+
+def test_skipped_status_exists():
+    assert TaskStatus.SKIPPED == "skipped"
+    assert TaskStatus.SKIPPED in list(TaskStatus)
+
+
+def test_conditional_def_defaults():
+    cond = ConditionalDef(condition_source="task-1")
+    assert cond.condition_source == "task-1"
+    assert cond.condition_type == "contains"
+    assert cond.condition_value == ""
+    assert cond.if_true == []
+    assert cond.if_false == []
+
+
+def test_conditional_def_full():
+    cond = ConditionalDef(
+        condition_source="task-1",
+        condition_type="llm_judge",
+        condition_value="Tests pass",
+        if_true=["task-2"],
+        if_false=["task-3"],
+    )
+    assert cond.condition_type == "llm_judge"
+    assert cond.if_true == ["task-2"]
+    assert cond.if_false == ["task-3"]
+
+
+def test_loop_def_defaults():
+    loop = LoopDef()
+    assert loop.max_iterations == 3
+    assert loop.condition_type == "llm_judge"
+    assert loop.condition_value == ""
+    assert loop.loop_task_ids == []
+
+
+def test_loop_def_full():
+    loop = LoopDef(
+        max_iterations=5,
+        condition_type="contains",
+        condition_value="PASS",
+        loop_task_ids=["task-a", "task-b"],
+    )
+    assert loop.max_iterations == 5
+    assert loop.loop_task_ids == ["task-a", "task-b"]
+
+
+def test_agents_config_max_loop_iterations():
+    cfg = Config()
+    assert cfg.agents.max_loop_iterations == 5
 
 
 def test_skill_zip_path_traversal(tmp_path):

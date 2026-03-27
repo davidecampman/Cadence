@@ -44,6 +44,7 @@ class AgentsConfig(BaseModel):
     max_iterations_per_task: int = 25
     max_tool_result_chars: int = 16_000  # Truncate tool outputs beyond this in agent history
     prune_threshold: int = 40            # Prune older tool results when history exceeds this many messages
+    max_loop_iterations: int = 5         # Hard cap on retry/loop iterations in task DAG
 
 
 class MemoryConfig(BaseModel):

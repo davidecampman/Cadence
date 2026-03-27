@@ -11,6 +11,8 @@ from cadence.core.config import Config
 from cadence.core.trace import TraceLogger
 from cadence.core.types import (
     AgentRole,
+    ConditionalDef,
+    LoopDef,
     Message,
     PermissionTier,
     Role,
@@ -689,3 +691,684 @@ class TestContextOverflowPrevention:
             assert "budget exceeded" not in result.lower()
             # Should have done the wrap-up call (tools=None)
             assert agent._total_tokens < 200000  # Should not have blown far past budget
+
+
+# ---------------------------------------------------------------------------
+# TaskDAG Conditional Branching
+# ---------------------------------------------------------------------------
+
+class TestTaskDAGConditionals:
+    """Tests for conditional branching in the task DAG."""
+
+    @pytest.mark.asyncio
+    async def test_conditional_true_branch(self):
+        """When condition is met, true-branch tasks stay PENDING and false-branch is SKIPPED."""
+        dag = TaskDAG()
+        source = Task(description="Research")
+        cond_task = Task(
+            description="Check results",
+            dependencies=[source.id],
+            metadata={
+                "conditional": {
+                    "condition_source": source.id,
+                    "condition_type": "contains",
+                    "condition_value": "found vulnerabilities",
+                    "if_true": [],   # will be filled below
+                    "if_false": [],
+                },
+            },
+        )
+        true_task = Task(description="Fix vulnerabilities", dependencies=[cond_task.id])
+        false_task = Task(description="Move on", dependencies=[cond_task.id])
+
+        # Wire up the branch IDs
+        cond_task.metadata["conditional"]["if_true"] = [true_task.id]
+        cond_task.metadata["conditional"]["if_false"] = [false_task.id]
+
+        for t in [source, cond_task, true_task, false_task]:
+            dag.add(t)
+
+        # Simulate source completing with a result that matches
+        source.status = TaskStatus.COMPLETED
+        source.result = "Analysis found vulnerabilities in the auth module"
+        results = {source.id: source.result}
+
+        await dag.evaluate_conditionals(results, llm_judge_fn=None)
+
+        assert cond_task.status == TaskStatus.COMPLETED
+        assert "TRUE" in cond_task.result
+        assert false_task.status == TaskStatus.SKIPPED
+        assert true_task.status == TaskStatus.PENDING  # ready to run
+
+    @pytest.mark.asyncio
+    async def test_conditional_false_branch(self):
+        """When condition is NOT met, false-branch runs and true-branch is SKIPPED."""
+        dag = TaskDAG()
+        source = Task(description="Research")
+        cond_task = Task(
+            description="Check results",
+            dependencies=[source.id],
+            metadata={
+                "conditional": {
+                    "condition_source": source.id,
+                    "condition_type": "contains",
+                    "condition_value": "found vulnerabilities",
+                    "if_true": [],
+                    "if_false": [],
+                },
+            },
+        )
+        true_task = Task(description="Fix vulnerabilities", dependencies=[cond_task.id])
+        false_task = Task(description="Move on", dependencies=[cond_task.id])
+        cond_task.metadata["conditional"]["if_true"] = [true_task.id]
+        cond_task.metadata["conditional"]["if_false"] = [false_task.id]
+
+        for t in [source, cond_task, true_task, false_task]:
+            dag.add(t)
+
+        source.status = TaskStatus.COMPLETED
+        source.result = "No issues found, everything looks clean"
+        results = {source.id: source.result}
+
+        await dag.evaluate_conditionals(results, llm_judge_fn=None)
+
+        assert cond_task.status == TaskStatus.COMPLETED
+        assert "FALSE" in cond_task.result
+        assert true_task.status == TaskStatus.SKIPPED
+        assert false_task.status == TaskStatus.PENDING
+
+    @pytest.mark.asyncio
+    async def test_conditional_skipped_cascades(self):
+        """Tasks depending on a SKIPPED task are themselves cascaded to SKIPPED."""
+        dag = TaskDAG()
+        source = Task(description="Research")
+        cond_task = Task(
+            description="Check",
+            dependencies=[source.id],
+            metadata={
+                "conditional": {
+                    "condition_source": source.id,
+                    "condition_type": "contains",
+                    "condition_value": "yes",
+                    "if_true": [],
+                    "if_false": [],
+                },
+            },
+        )
+        true_task = Task(description="Do A", dependencies=[cond_task.id])
+        downstream = Task(description="After A", dependencies=[true_task.id])
+        false_task = Task(description="Do B", dependencies=[cond_task.id])
+
+        cond_task.metadata["conditional"]["if_true"] = [true_task.id]
+        cond_task.metadata["conditional"]["if_false"] = [false_task.id]
+
+        for t in [source, cond_task, true_task, downstream, false_task]:
+            dag.add(t)
+
+        source.status = TaskStatus.COMPLETED
+        source.result = "no"
+        results = {source.id: source.result}
+
+        await dag.evaluate_conditionals(results, llm_judge_fn=None)
+
+        # true_task should be SKIPPED
+        assert true_task.status == TaskStatus.SKIPPED
+
+        # Now call ready_tasks — downstream should cascade to SKIPPED
+        ready = dag.ready_tasks()
+        assert downstream.status == TaskStatus.SKIPPED
+        assert downstream not in ready
+
+        # false_task should be ready
+        assert false_task.status == TaskStatus.PENDING
+        assert false_task in ready
+
+    @pytest.mark.asyncio
+    async def test_conditional_equals(self):
+        """Test the 'equals' condition type."""
+        dag = TaskDAG()
+        source = Task(description="Classify")
+        cond_task = Task(
+            description="Route",
+            dependencies=[source.id],
+            metadata={
+                "conditional": {
+                    "condition_source": source.id,
+                    "condition_type": "equals",
+                    "condition_value": "BUG",
+                    "if_true": [],
+                    "if_false": [],
+                },
+            },
+        )
+        bug_fix = Task(description="Fix bug", dependencies=[cond_task.id])
+        feature = Task(description="Add feature", dependencies=[cond_task.id])
+        cond_task.metadata["conditional"]["if_true"] = [bug_fix.id]
+        cond_task.metadata["conditional"]["if_false"] = [feature.id]
+
+        for t in [source, cond_task, bug_fix, feature]:
+            dag.add(t)
+
+        source.status = TaskStatus.COMPLETED
+        source.result = "BUG"
+        results = {source.id: source.result}
+
+        await dag.evaluate_conditionals(results, llm_judge_fn=None)
+
+        assert bug_fix.status == TaskStatus.PENDING
+        assert feature.status == TaskStatus.SKIPPED
+
+    @pytest.mark.asyncio
+    async def test_conditional_llm_judge(self):
+        """Test the 'llm_judge' condition type with a mock judge."""
+        dag = TaskDAG()
+        source = Task(description="Run tests")
+        cond_task = Task(
+            description="Check pass/fail",
+            dependencies=[source.id],
+            metadata={
+                "conditional": {
+                    "condition_source": source.id,
+                    "condition_type": "llm_judge",
+                    "condition_value": "All tests pass",
+                    "if_true": [],
+                    "if_false": [],
+                },
+            },
+        )
+        deploy = Task(description="Deploy", dependencies=[cond_task.id])
+        fix = Task(description="Fix failures", dependencies=[cond_task.id])
+        cond_task.metadata["conditional"]["if_true"] = [deploy.id]
+        cond_task.metadata["conditional"]["if_false"] = [fix.id]
+
+        for t in [source, cond_task, deploy, fix]:
+            dag.add(t)
+
+        source.status = TaskStatus.COMPLETED
+        source.result = "5/5 tests passed"
+        results = {source.id: source.result}
+
+        # Mock LLM judge that says YES
+        async def mock_judge(result_text, condition):
+            return True
+
+        await dag.evaluate_conditionals(results, llm_judge_fn=mock_judge)
+
+        assert deploy.status == TaskStatus.PENDING
+        assert fix.status == TaskStatus.SKIPPED
+
+    @pytest.mark.asyncio
+    async def test_conditional_waits_for_source(self):
+        """Conditional node is not evaluated until its source is COMPLETED."""
+        dag = TaskDAG()
+        source = Task(description="Research")
+        cond_task = Task(
+            description="Check",
+            dependencies=[source.id],
+            metadata={
+                "conditional": {
+                    "condition_source": source.id,
+                    "condition_type": "contains",
+                    "condition_value": "done",
+                    "if_true": [],
+                    "if_false": [],
+                },
+            },
+        )
+        dag.add(source)
+        dag.add(cond_task)
+
+        # Source still PENDING — conditional should NOT be evaluated
+        await dag.evaluate_conditionals({}, llm_judge_fn=None)
+        assert cond_task.status == TaskStatus.PENDING
+
+    @pytest.mark.asyncio
+    async def test_conditional_malformed_ignored(self):
+        """Malformed conditional metadata is ignored — task behaves normally."""
+        dag = TaskDAG()
+        source = Task(description="Work")
+        bad_cond = Task(
+            description="Bad conditional",
+            dependencies=[source.id],
+            metadata={"conditional": "not a dict"},
+        )
+        dag.add(source)
+        dag.add(bad_cond)
+
+        source.status = TaskStatus.COMPLETED
+        await dag.evaluate_conditionals({source.id: "result"}, llm_judge_fn=None)
+
+        # Should still be PENDING since it couldn't parse the conditional
+        assert bad_cond.status == TaskStatus.PENDING
+
+
+# ---------------------------------------------------------------------------
+# TaskDAG Loop / Retry
+# ---------------------------------------------------------------------------
+
+class TestTaskDAGLoops:
+    """Tests for retry/loop constructs in the task DAG."""
+
+    @pytest.mark.asyncio
+    async def test_loop_retries_on_failure(self):
+        """Task with unmet loop condition is reset to PENDING."""
+        dag = TaskDAG()
+        task = Task(
+            description="Write and test code",
+            metadata={
+                "role": "coder",
+                "loop": {
+                    "max_iterations": 3,
+                    "condition_type": "contains",
+                    "condition_value": "PASS",
+                    "loop_task_ids": [],
+                },
+            },
+        )
+        dag.add(task)
+        task.status = TaskStatus.COMPLETED
+        task.result = "Tests FAILED: 2 errors"
+        results = {task.id: task.result}
+
+        retrying = await dag.evaluate_loop(task, results, llm_judge_fn=None, max_cap=5)
+
+        assert retrying is True
+        assert task.status == TaskStatus.PENDING
+        assert task.result is None
+        assert task.id not in results
+        assert dag._iteration_counts[task.id] == 1
+
+    @pytest.mark.asyncio
+    async def test_loop_stops_at_max_iterations(self):
+        """After max iterations, loop stops retrying."""
+        dag = TaskDAG()
+        task = Task(
+            description="Flaky task",
+            metadata={
+                "loop": {
+                    "max_iterations": 2,
+                    "condition_type": "contains",
+                    "condition_value": "PASS",
+                    "loop_task_ids": [],
+                },
+            },
+        )
+        dag.add(task)
+
+        # Simulate 2 failed iterations
+        for i in range(2):
+            task.status = TaskStatus.COMPLETED
+            task.result = "FAILED"
+            results = {task.id: task.result}
+            await dag.evaluate_loop(task, results, llm_judge_fn=None, max_cap=5)
+
+        # Third attempt should NOT retry
+        task.status = TaskStatus.COMPLETED
+        task.result = "FAILED again"
+        results = {task.id: task.result}
+        retrying = await dag.evaluate_loop(task, results, llm_judge_fn=None, max_cap=5)
+
+        assert retrying is False
+        assert task.metadata.get("loop_exhausted") is True
+
+    @pytest.mark.asyncio
+    async def test_loop_succeeds_first_try(self):
+        """When condition is met immediately, no retry occurs."""
+        dag = TaskDAG()
+        task = Task(
+            description="Good task",
+            metadata={
+                "loop": {
+                    "max_iterations": 3,
+                    "condition_type": "contains",
+                    "condition_value": "PASS",
+                    "loop_task_ids": [],
+                },
+            },
+        )
+        dag.add(task)
+        task.status = TaskStatus.COMPLETED
+        task.result = "All tests PASS"
+        results = {task.id: task.result}
+
+        retrying = await dag.evaluate_loop(task, results, llm_judge_fn=None, max_cap=5)
+
+        assert retrying is False
+        assert task.status == TaskStatus.COMPLETED
+
+    @pytest.mark.asyncio
+    async def test_loop_respects_config_cap(self):
+        """Config max_cap overrides loop's own max_iterations."""
+        dag = TaskDAG()
+        task = Task(
+            description="Ambitious task",
+            metadata={
+                "loop": {
+                    "max_iterations": 10,  # Wants 10 retries
+                    "condition_type": "contains",
+                    "condition_value": "PASS",
+                    "loop_task_ids": [],
+                },
+            },
+        )
+        dag.add(task)
+
+        # Config cap is 2
+        for i in range(2):
+            task.status = TaskStatus.COMPLETED
+            task.result = "FAILED"
+            results = {task.id: task.result}
+            await dag.evaluate_loop(task, results, llm_judge_fn=None, max_cap=2)
+
+        # Should stop even though max_iterations=10
+        task.status = TaskStatus.COMPLETED
+        task.result = "FAILED"
+        results = {task.id: task.result}
+        retrying = await dag.evaluate_loop(task, results, llm_judge_fn=None, max_cap=2)
+
+        assert retrying is False
+        assert task.metadata.get("loop_exhausted") is True
+
+    @pytest.mark.asyncio
+    async def test_loop_resets_related_tasks(self):
+        """Loop retry resets both the anchor task and its loop_task_ids."""
+        dag = TaskDAG()
+        helper = Task(description="Gather data")
+        main = Task(
+            description="Process and validate",
+            dependencies=[helper.id],
+            metadata={
+                "loop": {
+                    "max_iterations": 3,
+                    "condition_type": "contains",
+                    "condition_value": "ALL_OK",
+                    "loop_task_ids": [helper.id],
+                },
+            },
+        )
+        dag.add(helper)
+        dag.add(main)
+
+        helper.status = TaskStatus.COMPLETED
+        helper.result = "raw data"
+        main.status = TaskStatus.COMPLETED
+        main.result = "errors found in output"
+        results = {helper.id: helper.result, main.id: main.result}
+
+        retrying = await dag.evaluate_loop(main, results, llm_judge_fn=None, max_cap=5)
+
+        assert retrying is True
+        assert main.status == TaskStatus.PENDING
+        assert helper.status == TaskStatus.PENDING
+        assert helper.id not in results
+        assert main.id not in results
+
+    @pytest.mark.asyncio
+    async def test_loop_with_llm_judge(self):
+        """Loop uses llm_judge condition type correctly."""
+        dag = TaskDAG()
+        task = Task(
+            description="Write code",
+            metadata={
+                "loop": {
+                    "max_iterations": 3,
+                    "condition_type": "llm_judge",
+                    "condition_value": "Code is correct and complete",
+                    "loop_task_ids": [],
+                },
+            },
+        )
+        dag.add(task)
+        task.status = TaskStatus.COMPLETED
+        task.result = "def add(a, b): return a + b"
+        results = {task.id: task.result}
+
+        # Judge says YES — no retry
+        async def judge_yes(result_text, condition):
+            return True
+
+        retrying = await dag.evaluate_loop(task, results, llm_judge_fn=judge_yes, max_cap=5)
+        assert retrying is False
+
+    @pytest.mark.asyncio
+    async def test_loop_malformed_ignored(self):
+        """Malformed loop metadata does not cause errors."""
+        dag = TaskDAG()
+        task = Task(
+            description="Bad loop",
+            metadata={"loop": "not a dict"},
+        )
+        dag.add(task)
+        task.status = TaskStatus.COMPLETED
+        task.result = "result"
+        results = {task.id: task.result}
+
+        retrying = await dag.evaluate_loop(task, results, llm_judge_fn=None, max_cap=5)
+        assert retrying is False
+
+
+# ---------------------------------------------------------------------------
+# TaskDAG Backward Compatibility
+# ---------------------------------------------------------------------------
+
+class TestTaskDAGBackwardCompat:
+    """Ensure existing behaviour is unaffected by the new features."""
+
+    def test_plain_tasks_unchanged(self):
+        """DAG with no conditional or loop metadata works exactly as before."""
+        dag = TaskDAG()
+        t1 = Task(description="Step 1")
+        t2 = Task(description="Step 2", dependencies=[t1.id])
+        t3 = Task(description="Step 3", dependencies=[t2.id])
+        dag.add(t1)
+        dag.add(t2)
+        dag.add(t3)
+
+        assert dag.ready_tasks() == [t1]
+
+        t1.status = TaskStatus.COMPLETED
+        assert dag.ready_tasks() == [t2]
+
+        t2.status = TaskStatus.COMPLETED
+        assert dag.ready_tasks() == [t3]
+
+        t3.status = TaskStatus.COMPLETED
+        assert dag.all_completed()
+
+    def test_skipped_status_in_all_completed(self):
+        """A DAG with SKIPPED tasks is considered complete."""
+        dag = TaskDAG()
+        t1 = Task(description="Done")
+        t2 = Task(description="Skipped")
+        dag.add(t1)
+        dag.add(t2)
+
+        t1.status = TaskStatus.COMPLETED
+        t2.status = TaskStatus.SKIPPED
+        assert dag.all_completed()
+
+    def test_summary_includes_skipped_icon(self):
+        """Summary shows skip icon for SKIPPED tasks."""
+        dag = TaskDAG()
+        t = Task(description="Skipped task")
+        dag.add(t)
+        t.status = TaskStatus.SKIPPED
+        summary = dag.summary()
+        assert "Skipped task" in summary
+
+    def test_failed_deps_do_not_cascade_skip(self):
+        """FAILED deps do NOT trigger cascading skip (only SKIPPED does)."""
+        dag = TaskDAG()
+        t1 = Task(description="Fails")
+        t2 = Task(description="Depends on failure", dependencies=[t1.id])
+        dag.add(t1)
+        dag.add(t2)
+
+        t1.status = TaskStatus.FAILED
+        ready = dag.ready_tasks()
+        # t2 should become ready (FAILED is terminal), not skipped
+        assert t2 in ready
+        assert t2.status == TaskStatus.PENDING
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator with conditionals and loops (integration)
+# ---------------------------------------------------------------------------
+
+class TestOrchestratorConditionalIntegration:
+    """End-to-end tests for the orchestrator with conditional and loop tasks."""
+
+    @pytest.mark.asyncio
+    async def test_orchestrator_conditional_flow(self):
+        """Orchestrator correctly routes through a conditional branch."""
+        import json
+        call_count = 0
+
+        async def mock_chat(model, messages, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            msg_content = messages[-1].content if messages else ""
+
+            if call_count == 1:
+                # Planning phase — emit tasks with a conditional
+                tasks = [
+                    {"description": "Research the topic", "role": "researcher", "dependencies": []},
+                    {
+                        "description": "Check if bugs found",
+                        "role": "conditional",
+                        "dependencies": [0],
+                        "conditional": {
+                            "condition_type": "contains",
+                            "condition_value": "bug",
+                            "if_true_indices": [2],
+                            "if_false_indices": [3],
+                        },
+                    },
+                    {"description": "Fix bugs", "role": "coder", "dependencies": [1]},
+                    {"description": "Write summary", "role": "general", "dependencies": [1]},
+                ]
+                return (json.dumps(tasks), [], {"total_tokens": 20})
+            elif call_count == 2:
+                # Researcher agent — finds a bug
+                return ("Found a bug in the login module.", [], {"total_tokens": 15})
+            elif call_count == 3:
+                # Coder agent — fixes the bug (true branch)
+                return ("Fixed the login bug.", [], {"total_tokens": 15})
+            elif call_count == 4:
+                # Synthesis
+                return ("Research found and fixed a login bug.", [], {"total_tokens": 10})
+            else:
+                # Evaluation
+                return ("PASS", [], {"total_tokens": 5})
+
+        with patch("cadence.core.agent.chat_completion", side_effect=mock_chat), \
+             patch("cadence.agents.orchestrator.chat_completion", side_effect=mock_chat):
+            trace = TraceLogger(console=False)
+            registry = _make_registry()
+            config = _make_config()
+
+            orch = Orchestrator(tool_registry=registry, trace=trace, config=config)
+            result = await orch.run("Check for bugs and fix them")
+
+            assert isinstance(result, str)
+            assert len(result) > 0
+
+            # Verify the conditional task was evaluated and summary task was skipped
+            tasks = list(orch.dag._tasks.values())
+            cond_tasks = [t for t in tasks if "conditional" in t.metadata]
+            assert len(cond_tasks) == 1
+            assert cond_tasks[0].status == TaskStatus.COMPLETED
+
+            # The "Write summary" task (false branch) should be skipped
+            summary_tasks = [t for t in tasks if t.description == "Write summary"]
+            assert len(summary_tasks) == 1
+            assert summary_tasks[0].status == TaskStatus.SKIPPED
+
+    @pytest.mark.asyncio
+    async def test_orchestrator_loop_retry(self):
+        """Orchestrator retries a looping task when condition is not met."""
+        import json
+        call_count = 0
+
+        async def mock_chat(model, messages, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            msg_content = messages[-1].content if messages else ""
+
+            if call_count == 1:
+                # Planning phase — task with loop
+                tasks = [
+                    {
+                        "description": "Write and test code",
+                        "role": "coder",
+                        "dependencies": [],
+                        "loop": {
+                            "max_iterations": 3,
+                            "condition_type": "contains",
+                            "condition_value": "PASS",
+                        },
+                    },
+                ]
+                return (json.dumps(tasks), [], {"total_tokens": 20})
+            elif call_count == 2:
+                # First attempt — fails
+                return ("Tests FAILED: syntax error on line 5", [], {"total_tokens": 15})
+            elif call_count == 3:
+                # Second attempt — passes
+                return ("All tests PASS", [], {"total_tokens": 15})
+            elif call_count == 4:
+                # Synthesis (single result, returns directly)
+                return ("Code written and all tests pass.", [], {"total_tokens": 10})
+            else:
+                # Evaluation
+                return ("PASS", [], {"total_tokens": 5})
+
+        with patch("cadence.core.agent.chat_completion", side_effect=mock_chat), \
+             patch("cadence.agents.orchestrator.chat_completion", side_effect=mock_chat):
+            trace = TraceLogger(console=False)
+            registry = _make_registry()
+            config = _make_config()
+
+            orch = Orchestrator(tool_registry=registry, trace=trace, config=config)
+            result = await orch.run("Write code that passes tests")
+
+            assert isinstance(result, str)
+            # The task should have been retried once
+            task = list(orch.dag._tasks.values())[0]
+            assert task.status == TaskStatus.COMPLETED
+            assert orch.dag._iteration_counts.get(task.id, 0) == 1
+
+    @pytest.mark.asyncio
+    async def test_orchestrator_llm_judge_integration(self):
+        """_llm_judge correctly parses YES/NO from the LLM."""
+        call_count = 0
+
+        async def mock_chat(model, messages, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            # Return YES for the judge call
+            return ("YES", [], {"total_tokens": 5})
+
+        with patch("cadence.agents.orchestrator.chat_completion", side_effect=mock_chat):
+            trace = TraceLogger(console=False)
+            registry = _make_registry()
+            config = _make_config()
+
+            orch = Orchestrator(tool_registry=registry, trace=trace, config=config)
+            result = await orch._llm_judge("All 5 tests passed.", "All tests pass")
+            assert result is True
+
+    @pytest.mark.asyncio
+    async def test_orchestrator_llm_judge_no(self):
+        """_llm_judge returns False when LLM says NO."""
+        async def mock_chat(model, messages, **kwargs):
+            return ("NO", [], {"total_tokens": 5})
+
+        with patch("cadence.agents.orchestrator.chat_completion", side_effect=mock_chat):
+            trace = TraceLogger(console=False)
+            registry = _make_registry()
+            config = _make_config()
+
+            orch = Orchestrator(tool_registry=registry, trace=trace, config=config)
+            result = await orch._llm_judge("2 tests failed.", "All tests pass")
+            assert result is False
