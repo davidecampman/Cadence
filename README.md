@@ -26,7 +26,7 @@ graph TB
     end
 
     subgraph Core Services
-        LLM[LLM Interface — LiteLLM]
+        LLM[LLM Interface]
         Memory[Memory — ChromaDB]
         KB[Knowledge Base]
         Tools[Tool Registry]
@@ -69,7 +69,7 @@ graph TB
 
 | Layer | Technology |
 |-------|------------|
-| Core | Python 3.11+, LiteLLM, Pydantic 2.0+ |
+| Core | Python 3.11+, Anthropic SDK, OpenAI SDK, Pydantic 2.0+ |
 | API | FastAPI, Uvicorn, WebSocket, SSE |
 | Memory & Knowledge | ChromaDB, NetworkX, PyPDF, python-docx |
 | Storage & Learning | SQLite (WAL mode) |
