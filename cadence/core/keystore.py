@@ -20,7 +20,7 @@ _DATA_DIR = Path(os.environ.get("CADENCE_DATA_DIR", "./data"))
 _MASTER_KEY_PATH = _DATA_DIR / ".keystore_key"
 _KEYS_PATH = _DATA_DIR / "api_keys.enc"
 
-# Provider name → environment variable that LiteLLM reads
+# Provider name → environment variable read by the SDKs / chat_completion()
 PROVIDER_ENV_VARS: dict[str, str] = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
