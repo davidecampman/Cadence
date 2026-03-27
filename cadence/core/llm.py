@@ -1,27 +1,35 @@
-"""LLM interface layer using LiteLLM for model-agnostic access."""
+"""LLM interface layer using openai + anthropic SDKs directly.
+
+Supports two provider paths:
+- **OpenRouter / OpenAI-compatible**: via the ``openai`` SDK
+- **AWS Bedrock**: via the ``anthropic`` SDK with Bedrock transport
+- **Anthropic direct**: via the ``anthropic`` SDK
+"""
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from typing import Any
 
-import litellm
+import anthropic
+import openai
 
 from cadence.core.types import Message, Role, ToolCall, ToolDefinition
 
-# Suppress LiteLLM's verbose logging
-litellm.suppress_debug_info = True
+logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Bedrock environment / credential helpers
+# ---------------------------------------------------------------------------
 
 def _configure_bedrock_env(bedrock_config) -> dict[str, Any]:
-    """Set environment variables for LiteLLM's Bedrock integration.
+    """Apply bedrock_config values to environment variables.
 
-    LiteLLM reads AWS credentials from env vars. This applies the config
-    values only if they aren't already set (env vars take precedence).
-
-    Returns a dict of extra kwargs to pass to litellm.acompletion (e.g. api_key).
+    Returns a dict of extra kwargs for the Anthropic Bedrock client.
     """
     if bedrock_config.region:
         os.environ.setdefault("AWS_REGION_NAME", bedrock_config.region)
@@ -34,42 +42,35 @@ def _configure_bedrock_env(bedrock_config) -> dict[str, Any]:
     if bedrock_config.secret_access_key:
         os.environ.setdefault("AWS_SECRET_ACCESS_KEY", bedrock_config.secret_access_key)
 
-    extra_kwargs: dict[str, Any] = {}
+    extra: dict[str, Any] = {}
     bedrock_api_key = bedrock_config.api_key or os.environ.get("BEDROCK_API_KEY")
     if bedrock_api_key:
-        extra_kwargs["api_key"] = bedrock_api_key
-        # LiteLLM's bedrock handler requires boto3 credentials even when using
-        # Bearer token auth (api_key). Set placeholder AWS creds so boto3
-        # session initialization doesn't fail.
+        extra["api_key"] = bedrock_api_key
         os.environ.setdefault("AWS_ACCESS_KEY_ID", "bedrock-api-key-auth")
         os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "bedrock-api-key-auth")
-    return extra_kwargs
+    return extra
 
 
 def _configure_bedrock_from_env() -> dict[str, Any]:
-    """Build bedrock extra kwargs from environment variables alone.
-
-    Used when a model has a bedrock/ prefix but no explicit bedrock config.
-    """
-    extra_kwargs: dict[str, Any] = {}
+    """Build bedrock extra kwargs from environment variables alone."""
+    extra: dict[str, Any] = {}
     bedrock_api_key = os.environ.get("BEDROCK_API_KEY")
     if bedrock_api_key:
-        extra_kwargs["api_key"] = bedrock_api_key
+        extra["api_key"] = bedrock_api_key
         os.environ.setdefault("AWS_ACCESS_KEY_ID", "bedrock-api-key-auth")
         os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "bedrock-api-key-auth")
     os.environ.setdefault("AWS_REGION_NAME", "us-east-1")
-    return extra_kwargs
+    return extra
 
+
+# ---------------------------------------------------------------------------
+# Message / tool conversion — OpenAI format (used for OpenRouter + OpenAI)
+# ---------------------------------------------------------------------------
 
 def _messages_to_dicts(messages: list[Message]) -> list[dict[str, Any]]:
-    """Convert our Message objects to the format LiteLLM expects.
-
-    Handles both text-only and multi-modal (text + images) content.
-    """
+    """Convert Message objects to OpenAI-compatible dicts."""
     result = []
     for msg in messages:
-        # Support multi-modal content: if content is a list, it contains
-        # content blocks (text + images); otherwise it's a plain string.
         content = msg.content
         if hasattr(msg, "content_blocks") and msg.content_blocks:
             content = msg.content_blocks
@@ -110,6 +111,85 @@ def _tools_to_dicts(tools: list[ToolDefinition]) -> list[dict[str, Any]]:
     ]
 
 
+# ---------------------------------------------------------------------------
+# Message / tool conversion — Anthropic format (used for Bedrock + Anthropic)
+# ---------------------------------------------------------------------------
+
+def _messages_to_anthropic(
+    messages: list[Message],
+) -> tuple[str | anthropic.NotGiven, list[dict[str, Any]]]:
+    """Convert Message objects to Anthropic SDK format.
+
+    Returns ``(system_prompt, messages)`` — Anthropic takes the system prompt
+    as a separate parameter rather than a system message in the list.
+    """
+    system: str | anthropic.NotGiven = anthropic.NOT_GIVEN
+    result: list[dict[str, Any]] = []
+
+    for msg in messages:
+        if msg.role == Role.SYSTEM:
+            system = msg.content
+            continue
+
+        if msg.role == Role.TOOL:
+            block: dict[str, Any] = {
+                "type": "tool_result",
+                "tool_use_id": msg.tool_call_id,
+                "content": msg.content,
+            }
+            # Anthropic expects tool_result blocks inside a user message.
+            # Group consecutive tool results into the same user message.
+            if (
+                result
+                and result[-1]["role"] == "user"
+                and isinstance(result[-1]["content"], list)
+                and result[-1]["content"]
+                and result[-1]["content"][-1].get("type") == "tool_result"
+            ):
+                result[-1]["content"].append(block)
+            else:
+                result.append({"role": "user", "content": [block]})
+            continue
+
+        if msg.role == Role.ASSISTANT and msg.tool_calls:
+            content: list[dict[str, Any]] = []
+            if msg.content:
+                content.append({"type": "text", "text": msg.content})
+            for tc in msg.tool_calls:
+                content.append({
+                    "type": "tool_use",
+                    "id": tc.id,
+                    "name": tc.name,
+                    "input": tc.arguments,
+                })
+            result.append({"role": "assistant", "content": content})
+            continue
+
+        # Regular user/assistant message
+        content_val: Any = msg.content
+        if hasattr(msg, "content_blocks") and msg.content_blocks:
+            content_val = msg.content_blocks
+        result.append({"role": msg.role.value, "content": content_val})
+
+    return system, result
+
+
+def _tools_to_anthropic(tools: list[ToolDefinition]) -> list[dict[str, Any]]:
+    """Convert ToolDefinitions to Anthropic SDK tool format."""
+    return [
+        {
+            "name": t.name,
+            "description": t.description,
+            "input_schema": t.parameters,
+        }
+        for t in tools
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Freetext tool-call fallback (unchanged)
+# ---------------------------------------------------------------------------
+
 def _extract_tool_calls_from_text(text: str) -> list[ToolCall]:
     """Fallback: parse tool calls from freetext for models without native tool_use.
 
@@ -121,7 +201,6 @@ def _extract_tool_calls_from_text(text: str) -> list[ToolCall]:
     """
     calls = []
 
-    # Pattern 1: ```tool ... ``` blocks
     for match in re.finditer(r"```tool\s*\n(.*?)\n```", text, re.DOTALL):
         try:
             data = json.loads(match.group(1).strip())
@@ -129,7 +208,6 @@ def _extract_tool_calls_from_text(text: str) -> list[ToolCall]:
         except (json.JSONDecodeError, KeyError):
             continue
 
-    # Pattern 2: <tool>...</tool> tags
     for match in re.finditer(r"<tool>(.*?)</tool>", text, re.DOTALL):
         try:
             data = json.loads(match.group(1).strip())
@@ -140,8 +218,10 @@ def _extract_tool_calls_from_text(text: str) -> list[ToolCall]:
     return calls
 
 
-# Map model name prefixes to the environment variable the direct provider needs.
-# Used to detect when a model should be rerouted through OpenRouter.
+# ---------------------------------------------------------------------------
+# Model routing helpers
+# ---------------------------------------------------------------------------
+
 _MODEL_PROVIDER_ENV: list[tuple[str, str]] = [
     ("claude-", "ANTHROPIC_API_KEY"),
     ("gpt-", "OPENAI_API_KEY"),
@@ -155,12 +235,7 @@ _MODEL_PROVIDER_ENV: list[tuple[str, str]] = [
 def _maybe_reroute_model(model: str) -> str:
     """Auto-prefix a model with ``openrouter/`` when the direct provider key
     is missing but an OpenRouter key is available.
-
-    This prevents ``litellm.AuthenticationError`` when users configure only
-    OpenRouter but the config contains bare model names like
-    ``claude-sonnet-4-5-20250514``.
     """
-    # Skip if already provider-prefixed (e.g. openrouter/, bedrock/, etc.)
     if "/" in model:
         return model
 
@@ -173,18 +248,14 @@ def _maybe_reroute_model(model: str) -> str:
         if model_lower.startswith(prefix):
             if not os.environ.get(env_var):
                 return f"openrouter/{model}"
-            break  # Direct key exists; use the native provider
-
+            break
     return model
 
 
-# Models known to support native function calling / tool_use
 _NATIVE_TOOL_USE_PREFIXES = (
     "gpt-4", "gpt-3.5", "claude-", "gemini-", "mistral",
     "command-r", "deepseek",
-    # OpenRouter-hosted models (LiteLLM uses "openrouter/" prefix)
     "openrouter/",
-    # Bedrock-hosted models (LiteLLM uses "bedrock/" prefix)
     "bedrock/",
 )
 
@@ -194,9 +265,6 @@ def _is_bedrock_model(model: str) -> bool:
     return model.lower().startswith("bedrock/")
 
 
-# Mapping from standard Anthropic model names to Bedrock model IDs.
-# When bedrock is enabled and users specify a bare model name (e.g. "claude-sonnet-4-20250514"),
-# we need to convert it to the Bedrock-specific ID (e.g. "anthropic.claude-sonnet-4-20250514-v1:0").
 _BEDROCK_MODEL_MAP: dict[str, str] = {
     # Claude 4.6 family
     "claude-opus-4-6-20250610": "anthropic.claude-opus-4-6-20250610-v1:0",
@@ -219,41 +287,41 @@ _BEDROCK_MODEL_MAP: dict[str, str] = {
 
 
 def _region_to_inference_prefix(region: str) -> str:
-    """Map an AWS region to the Bedrock cross-region inference profile prefix.
-
-    Newer Claude models (3.5+, 4.x) don't support on-demand throughput with
-    bare model IDs and require a cross-region inference profile. The profile
-    ID is formed by prepending a geographic prefix (e.g. ``us.``, ``eu.``,
-    ``ap.``) to the model ID.
-    """
+    """Map an AWS region to the Bedrock cross-region inference profile prefix."""
     if region.startswith("us-"):
         return "us"
     if region.startswith("eu-") or region.startswith("me-"):
         return "eu"
     if region.startswith("ap-"):
         return "ap"
-    # Default to "us" for unknown regions
     return "us"
 
 
 def _to_bedrock_model(model: str, region: str = "us-east-1") -> str:
     """Convert a standard model name to a Bedrock-prefixed model ID.
 
-    If the model is already bedrock-prefixed, return as-is.
-    If the model name is in our mapping, convert it using the converse route
-    with a cross-region inference profile prefix derived from *region*.
-    Otherwise, infer the Bedrock model ID: for Claude models, prepend
-    "anthropic." and append "-v1:0" to form a valid Bedrock ID.
+    Returns a string like ``bedrock/converse/us.anthropic.claude-...-v1:0``.
+    The ``bedrock/converse/`` prefix is an internal routing marker stripped
+    before making the actual SDK call.
     """
     if _is_bedrock_model(model):
         return model
     prefix = _region_to_inference_prefix(region)
     if model in _BEDROCK_MODEL_MAP:
         return f"bedrock/converse/{prefix}.{_BEDROCK_MODEL_MAP[model]}"
-    # Infer Bedrock ID for Claude models not yet in the explicit map
     if model.startswith("claude-"):
         return f"bedrock/converse/{prefix}.anthropic.{model}-v1:0"
     return f"bedrock/converse/{model}"
+
+
+def _strip_bedrock_prefix(model: str) -> str:
+    """Strip the internal ``bedrock/`` or ``bedrock/converse/`` routing prefix
+    to get the bare Bedrock model ID for the Anthropic SDK."""
+    if model.startswith("bedrock/converse/"):
+        return model[len("bedrock/converse/"):]
+    if model.startswith("bedrock/"):
+        return model[len("bedrock/"):]
+    return model
 
 
 def supports_native_tools(model: str) -> bool:
@@ -262,40 +330,47 @@ def supports_native_tools(model: str) -> bool:
     return any(model_lower.startswith(p) for p in _NATIVE_TOOL_USE_PREFIXES)
 
 
-async def chat_completion(
+def _get_provider(model: str) -> str:
+    """Determine which SDK path to use for a given model string."""
+    if model.startswith("bedrock/"):
+        return "bedrock"
+    if model.startswith("claude-"):
+        return "anthropic"
+    # openrouter/, gpt-*, or anything else → openai-compatible
+    return "openai"
+
+
+# ---------------------------------------------------------------------------
+# OpenAI-compatible completion (OpenRouter, OpenAI, etc.)
+# ---------------------------------------------------------------------------
+
+async def _openai_completion(
     model: str,
     messages: list[Message],
-    tools: list[ToolDefinition] | None = None,
-    temperature: float = 0.7,
-    max_tokens: int = 4096,
-    bedrock_config=None,
+    tools: list[ToolDefinition] | None,
+    temperature: float,
+    max_tokens: int,
 ) -> tuple[str, list[ToolCall], dict[str, Any]]:
-    """Call an LLM and return (text_response, tool_calls, usage_metadata).
+    """Call an OpenAI-compatible endpoint and return (text, tool_calls, usage)."""
 
-    Uses native tool_use when the model supports it, otherwise falls back
-    to freetext tool parsing.
+    # Determine base URL and API key
+    if model.startswith("openrouter/"):
+        base_url = "https://openrouter.ai/api/v1"
+        api_key = os.environ.get("OPENROUTER_API_KEY", "")
+        api_model = model[len("openrouter/"):]
+    else:
+        # Default: direct OpenAI
+        base_url = None  # uses sdk default
+        api_key = os.environ.get("OPENAI_API_KEY", "")
+        api_model = model
 
-    For Bedrock models, either pass a bedrock_config or use the ``bedrock/``
-    model prefix with AWS credentials configured via environment variables.
-    """
-    # Auto-reroute through OpenRouter when direct provider key is missing
-    model = _maybe_reroute_model(model)
-
-    # Apply Bedrock env vars if a config is provided
-    bedrock_extra: dict[str, Any] = {}
-    if bedrock_config and bedrock_config.enabled:
-        model = _to_bedrock_model(model, region=bedrock_config.region)
-        bedrock_extra = _configure_bedrock_env(bedrock_config)
-    elif _is_bedrock_model(model):
-        # Model is explicitly bedrock-prefixed; configure from env vars / keystore
-        bedrock_extra = _configure_bedrock_from_env()
+    client = openai.AsyncOpenAI(base_url=base_url, api_key=api_key)
 
     kwargs: dict[str, Any] = {
-        "model": model,
+        "model": api_model,
         "messages": _messages_to_dicts(messages),
         "temperature": temperature,
         "max_tokens": max_tokens,
-        **bedrock_extra,
     }
 
     use_native_tools = tools and supports_native_tools(model)
@@ -303,18 +378,13 @@ async def chat_completion(
         kwargs["tools"] = _tools_to_dicts(tools)
         kwargs["tool_choice"] = "auto"
 
-    # Let LiteLLM drop parameters unsupported by specific providers (e.g.
-    # Bedrock models that don't accept temperature/tools/tool_choice).
-    kwargs["drop_params"] = True
-
-    response = await litellm.acompletion(**kwargs)
+    response = await client.chat.completions.create(**kwargs)
     choice = response.choices[0]
     message = choice.message
 
     text = message.content or ""
     tool_calls: list[ToolCall] = []
 
-    # Extract tool calls from native API response
     if use_native_tools and message.tool_calls:
         for tc in message.tool_calls:
             try:
@@ -327,14 +397,130 @@ async def chat_completion(
                 arguments=args,
             ))
     elif not use_native_tools and text:
-        # Fallback parsing for models without native tool support
         tool_calls = _extract_tool_calls_from_text(text)
 
     usage = {
-        "prompt_tokens": getattr(response.usage, "prompt_tokens", 0),
-        "completion_tokens": getattr(response.usage, "completion_tokens", 0),
-        "total_tokens": getattr(response.usage, "total_tokens", 0),
+        "prompt_tokens": getattr(response.usage, "prompt_tokens", 0) or 0,
+        "completion_tokens": getattr(response.usage, "completion_tokens", 0) or 0,
+        "total_tokens": getattr(response.usage, "total_tokens", 0) or 0,
         "model": model,
     }
 
     return text, tool_calls, usage
+
+
+# ---------------------------------------------------------------------------
+# Anthropic completion (direct + Bedrock)
+# ---------------------------------------------------------------------------
+
+def _build_anthropic_client(
+    provider: str,
+    bedrock_config=None,
+) -> anthropic.AsyncAnthropic | anthropic.AsyncAnthropicBedrock:
+    """Construct the right Anthropic async client for the provider."""
+    if provider == "bedrock":
+        region = os.environ.get("AWS_REGION_NAME", "us-east-1")
+        if bedrock_config and bedrock_config.region:
+            region = bedrock_config.region
+        return anthropic.AsyncAnthropicBedrock(aws_region=region)
+    # Direct Anthropic
+    return anthropic.AsyncAnthropic(
+        api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+    )
+
+
+async def _anthropic_completion(
+    model: str,
+    messages: list[Message],
+    tools: list[ToolDefinition] | None,
+    temperature: float,
+    max_tokens: int,
+    provider: str,
+    bedrock_config=None,
+) -> tuple[str, list[ToolCall], dict[str, Any]]:
+    """Call the Anthropic API (direct or Bedrock) and return (text, tool_calls, usage)."""
+
+    if provider == "bedrock":
+        api_model = _strip_bedrock_prefix(model)
+    else:
+        api_model = model
+
+    client = _build_anthropic_client(provider, bedrock_config)
+    system, api_messages = _messages_to_anthropic(messages)
+
+    kwargs: dict[str, Any] = {
+        "model": api_model,
+        "messages": api_messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    if system is not anthropic.NOT_GIVEN:
+        kwargs["system"] = system
+    if tools:
+        kwargs["tools"] = _tools_to_anthropic(tools)
+
+    response = await client.messages.create(**kwargs)
+
+    text_parts: list[str] = []
+    tool_calls: list[ToolCall] = []
+
+    for block in response.content:
+        if block.type == "text":
+            text_parts.append(block.text)
+        elif block.type == "tool_use":
+            tool_calls.append(ToolCall(
+                id=block.id,
+                name=block.name,
+                arguments=block.input if isinstance(block.input, dict) else {},
+            ))
+
+    text = "\n".join(text_parts) if text_parts else ""
+
+    usage = {
+        "prompt_tokens": response.usage.input_tokens,
+        "completion_tokens": response.usage.output_tokens,
+        "total_tokens": response.usage.input_tokens + response.usage.output_tokens,
+        "model": model,
+    }
+
+    return text, tool_calls, usage
+
+
+# ---------------------------------------------------------------------------
+# Public API — single entry point
+# ---------------------------------------------------------------------------
+
+async def chat_completion(
+    model: str,
+    messages: list[Message],
+    tools: list[ToolDefinition] | None = None,
+    temperature: float = 0.7,
+    max_tokens: int = 4096,
+    bedrock_config=None,
+) -> tuple[str, list[ToolCall], dict[str, Any]]:
+    """Call an LLM and return (text_response, tool_calls, usage_metadata).
+
+    Automatically dispatches to the correct SDK based on the model string:
+    - ``bedrock/...`` → Anthropic SDK with Bedrock transport
+    - ``claude-...`` with ANTHROPIC_API_KEY → Anthropic SDK directly
+    - ``openrouter/...`` → OpenAI SDK with OpenRouter base URL
+    - anything else → OpenAI SDK (direct OpenAI or compatible)
+    """
+    # Auto-reroute through OpenRouter when direct provider key is missing
+    model = _maybe_reroute_model(model)
+
+    # Apply Bedrock env vars if a config is provided
+    if bedrock_config and bedrock_config.enabled:
+        model = _to_bedrock_model(model, region=bedrock_config.region)
+        _configure_bedrock_env(bedrock_config)
+    elif _is_bedrock_model(model):
+        _configure_bedrock_from_env()
+
+    provider = _get_provider(model)
+
+    if provider in ("bedrock", "anthropic"):
+        return await _anthropic_completion(
+            model, messages, tools, temperature, max_tokens,
+            provider=provider, bedrock_config=bedrock_config,
+        )
+    return await _openai_completion(model, messages, tools, temperature, max_tokens)

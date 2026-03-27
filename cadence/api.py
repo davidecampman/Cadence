@@ -595,7 +595,7 @@ async def remove_key(provider: str):
 #   /api/v1/models            – chat / completion models
 #   /api/v1/embeddings/models – embedding models
 # We query both and cache results so the UI always reflects what's actually
-# available, rather than relying on litellm's static registry.
+# available.
 
 _openrouter_cache: dict[str, list[str]] = {}  # "chat" | "embedding" -> model ids
 _openrouter_cache_ts: float = 0.0
@@ -608,8 +608,8 @@ async def _fetch_openrouter_models() -> dict[str, list[str]]:
     """Fetch chat and embedding models from OpenRouter, with caching.
 
     Returns a dict with keys ``"chat"`` and ``"embedding"``, each mapping to
-    a list of litellm-style model ids (``openrouter/<provider>/<model>``).
-    Falls back to ``None`` (caller should use litellm registry) on failure.
+    a list of model ids (``openrouter/<provider>/<model>``).
+    Returns empty lists on failure.
     """
     global _openrouter_cache, _openrouter_cache_ts
 
@@ -651,120 +651,77 @@ async def _fetch_openrouter_models() -> dict[str, list[str]]:
     except Exception as exc:
         logger.debug("Failed to fetch OpenRouter models: %s", exc)
 
-    # Return empty – caller will fall back to litellm registry
+    # Return empty – caller will use static registry
     return result
+
+
+# Static model registry of well-known models.  Only needs to list
+# well-known model names so the /api/models endpoint can enumerate them.
+_KNOWN_MODELS: dict[str, list[str]] = {
+    "openai": [
+        "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo",
+        "o1", "o1-mini", "o1-preview", "o3", "o3-mini", "o4-mini",
+        "text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002",
+    ],
+    "anthropic": [
+        "claude-opus-4-6-20250610", "claude-sonnet-4-6-20250610",
+        "claude-sonnet-4-5-20250514", "claude-haiku-4-5-20251001",
+        "claude-sonnet-4-20250514", "claude-opus-4-20250514",
+        "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022",
+        "claude-3-opus-20240229", "claude-3-sonnet-20240229", "claude-3-haiku-20240307",
+    ],
+    "google": [
+        "gemini/gemini-2.5-pro", "gemini/gemini-2.5-flash",
+        "gemini/gemini-2.0-flash", "gemini/gemini-1.5-pro", "gemini/gemini-1.5-flash",
+    ],
+    "mistral": [
+        "mistral/mistral-large-latest", "mistral/mistral-medium-latest",
+        "mistral/mistral-small-latest", "mistral/codestral-latest",
+        "mistral-embed",
+    ],
+    "cohere": [
+        "command-r-plus", "command-r", "embed-english-v3.0", "embed-multilingual-v3.0",
+    ],
+    "deepseek": ["deepseek/deepseek-chat", "deepseek/deepseek-coder"],
+    "groq": [
+        "groq/llama-3.3-70b-versatile", "groq/llama-3.1-8b-instant",
+        "groq/mixtral-8x7b-32768", "groq/gemma2-9b-it",
+    ],
+}
+
+_EMBEDDING_KEYWORDS = ("embed",)
 
 
 @app.get("/api/models/{provider}")
 async def list_models(provider: str, tier: str | None = None):
-    """Return available model names for a provider using litellm's model registry.
+    """Return available model names for a provider.
 
-    Filters litellm's known model list by provider-specific prefixes or naming
-    patterns. When ``tier`` is provided (strong, fast, embedding), further
-    filters to models appropriate for that use case.
+    Uses a static registry for most providers, the live OpenRouter API for
+    OpenRouter, and ``_BEDROCK_MODEL_MAP`` for Bedrock.
     """
-    from litellm import model_cost
-
     provider = provider.lower()
     tier = tier.lower() if tier else None
 
-    # Provider prefix/pattern mapping.
-    # Some providers use a "prefix/" style in litellm, others use name patterns.
-    _PROVIDER_FILTERS: dict[str, dict] = {
-        "openai": {"prefixes": ["gpt-", "o1", "o3", "o4", "chatgpt-", "text-embedding-"], "litellm_prefix": "openai/"},
-        "anthropic": {"prefixes": ["claude-", "voyage-"]},
-        "google": {"litellm_prefix": "gemini/"},
-        "mistral": {"prefixes": ["mistral-embed"], "litellm_prefix": "mistral/"},
-        "cohere": {"prefixes": ["command-", "embed-"]},
-        "deepseek": {"prefixes": ["deepseek-"], "litellm_prefix": "deepseek/"},
-        "groq": {"litellm_prefix": "groq/"},
-        "openrouter": {"litellm_prefix": "openrouter/"},
-        "ollama": {"litellm_prefix": "ollama/"},
-        "bedrock": {"litellm_prefix": "bedrock/"},
-    }
-
-    filt = _PROVIDER_FILTERS.get(provider)
-    if not filt:
-        return {"provider": provider, "models": []}
-
-    # --- OpenRouter: use their live API for all tiers ---
+    # --- OpenRouter: use their live API ---
     if provider == "openrouter":
         or_models = await _fetch_openrouter_models()
         models: set[str] = set()
         if tier == "embedding":
             models.update(or_models.get("embedding", []))
-        elif tier in ("strong", "fast"):
-            models.update(or_models.get("chat", []))
         else:
-            # No tier specified: show chat models (exclude embeddings)
             models.update(or_models.get("chat", []))
-
-        # If the live API returned results, use them; otherwise fall through
-        # to the litellm registry below as a last resort.
         if models:
             return {"provider": provider, "models": sorted(models)}
+        # Fallback: return empty rather than stale data
+        return {"provider": provider, "models": []}
 
-    # --- Tier-based exclusion / inclusion patterns ---
-    # Embedding tier: only show embedding models.
-    # Strong/Fast tiers: exclude embedding, image, audio, etc.
-    # No tier: show all text/chat models (existing behaviour).
-
-    _EXCLUDE_NON_TEXT = (
-        "dall-e", "tts-", "whisper", "moderation",
-        "stable-diffusion", "canvas", "image", "video", "audio",
-        "rerank", "polly", "transcribe",
-    )
-
-    _EMBEDDING_KEYWORDS = ("embed",)
-
-    models: set[str] = set()
-    for key in model_cost:
-        key_lower = key.lower()
-
-        # Always skip non-text media models
-        if any(ex in key_lower for ex in _EXCLUDE_NON_TEXT):
-            continue
-
-        is_embedding = any(kw in key_lower for kw in _EMBEDDING_KEYWORDS)
-
-        # Tier-based filtering
-        if tier == "embedding" and not is_embedding:
-            continue
-        if tier in ("strong", "fast") and is_embedding:
-            continue
-        # When no tier specified, exclude embeddings (original behaviour)
-        if tier is None and is_embedding:
-            continue
-
-        matched = False
-        # Check litellm prefix (e.g. "bedrock/...", "gemini/...")
-        if filt.get("litellm_prefix") and key_lower.startswith(filt["litellm_prefix"]):
-            matched = True
-        # Check name prefixes (e.g. "gpt-", "claude-")
-        for pfx in filt.get("prefixes", []):
-            if key_lower.startswith(pfx):
-                matched = True
-                break
-
-        if matched:
-            # For bedrock, deduplicate regional/commitment variants
-            # e.g. "bedrock/converse/us-east-1/anthropic.claude-..." → "bedrock/converse/anthropic.claude-..."
-            # Always use the converse route as it's the recommended Bedrock API path.
-            if provider == "bedrock":
-                parts = key.split("/")
-                model_id = parts[-1]  # last component is always the model ID
-                models.add(f"bedrock/converse/{model_id}")
-            else:
-                models.add(key)
-
-    # For bedrock, also include models from our explicit mapping so users
-    # always see the latest Claude models even if litellm's registry is outdated.
+    # --- Bedrock: use our explicit model map ---
     if provider == "bedrock":
         from cadence.core.llm import _BEDROCK_MODEL_MAP, _region_to_inference_prefix
         _bedrock_region = get_app().config.models.bedrock.region
         _inf_prefix = _region_to_inference_prefix(_bedrock_region)
+        models = set()
         for _std_name, _br_id in _BEDROCK_MODEL_MAP.items():
-            candidate = f"bedrock/converse/{_inf_prefix}.{_br_id}"
             is_embedding = any(kw in _br_id.lower() for kw in _EMBEDDING_KEYWORDS)
             if tier == "embedding" and not is_embedding:
                 continue
@@ -772,7 +729,24 @@ async def list_models(provider: str, tier: str | None = None):
                 continue
             if tier is None and is_embedding:
                 continue
-            models.add(candidate)
+            models.add(f"bedrock/converse/{_inf_prefix}.{_br_id}")
+        return {"provider": provider, "models": sorted(models)}
+
+    # --- Static registry for other providers ---
+    known = _KNOWN_MODELS.get(provider)
+    if not known:
+        return {"provider": provider, "models": []}
+
+    models = set()
+    for key in known:
+        is_embedding = any(kw in key.lower() for kw in _EMBEDDING_KEYWORDS)
+        if tier == "embedding" and not is_embedding:
+            continue
+        if tier in ("strong", "fast") and is_embedding:
+            continue
+        if tier is None and is_embedding:
+            continue
+        models.add(key)
 
     return {"provider": provider, "models": sorted(models)}
 
