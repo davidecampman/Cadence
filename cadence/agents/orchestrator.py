@@ -14,6 +14,8 @@ from cadence.core.message_bus import MessageBus
 from cadence.core.trace import TraceLogger
 from cadence.core.types import (
     AgentRole,
+    ConditionalDef,
+    LoopDef,
     Message,
     PermissionTier,
     Role,
@@ -74,10 +76,17 @@ ROLES = {
 
 
 class TaskDAG:
-    """Manages a directed acyclic graph of tasks with dependency resolution."""
+    """Manages a directed acyclic graph of tasks with dependency resolution.
+
+    Supports conditional branching and retry/loop constructs via metadata
+    on individual tasks.
+    """
+
+    _TERMINAL_STATES = {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.SKIPPED}
 
     def __init__(self):
         self._tasks: dict[str, Task] = {}
+        self._iteration_counts: dict[str, int] = {}  # loop-anchor task ID -> count
 
     def add(self, task: Task) -> Task:
         self._tasks[task.id] = task
@@ -87,23 +96,38 @@ class TaskDAG:
         return self._tasks.get(task_id)
 
     def ready_tasks(self) -> list[Task]:
-        """Return tasks whose dependencies are all completed."""
+        """Return tasks whose dependencies are all completed/skipped.
+
+        If a dependency was SKIPPED, the dependent task is also cascaded to
+        SKIPPED (it can never run because its prerequisite was never executed).
+        """
         ready = []
         for task in self._tasks.values():
             if task.status != TaskStatus.PENDING:
                 continue
-            deps_met = all(
-                self._tasks[dep_id].status == TaskStatus.COMPLETED
+
+            dep_statuses = [
+                self._tasks[dep_id].status
                 for dep_id in task.dependencies
                 if dep_id in self._tasks
-            )
-            if deps_met:
-                ready.append(task)
+            ]
+
+            all_terminal = all(s in self._TERMINAL_STATES for s in dep_statuses)
+            if not all_terminal:
+                continue
+
+            # Cascade skip: if any dependency was skipped, skip this task too
+            if any(s == TaskStatus.SKIPPED for s in dep_statuses):
+                task.status = TaskStatus.SKIPPED
+                task.result = "Skipped — prerequisite task was skipped"
+                continue
+
+            ready.append(task)
         return ready
 
     def all_completed(self) -> bool:
         return all(
-            t.status in (TaskStatus.COMPLETED, TaskStatus.FAILED)
+            t.status in self._TERMINAL_STATES
             for t in self._tasks.values()
         )
 
@@ -116,9 +140,130 @@ class TaskDAG:
                 TaskStatus.COMPLETED: "✅",
                 TaskStatus.FAILED: "❌",
                 TaskStatus.BLOCKED: "🚫",
+                TaskStatus.SKIPPED: "⏭️",
             }.get(t.status, "?")
             lines.append(f"  {status_icon} [{t.id[:6]}] {t.description}")
         return "\n".join(lines)
+
+    # --- Conditional branching ---
+
+    async def evaluate_conditionals(
+        self,
+        results: dict[str, str],
+        llm_judge_fn,
+    ) -> None:
+        """Evaluate conditional nodes whose source dependency has completed.
+
+        For each conditional task that is still PENDING and whose
+        ``condition_source`` is COMPLETED, evaluate the condition and
+        activate one branch while skipping the other.
+        """
+        for task in list(self._tasks.values()):
+            if task.status != TaskStatus.PENDING:
+                continue
+            cond_data = task.metadata.get("conditional")
+            if not cond_data or not isinstance(cond_data, dict):
+                continue
+
+            try:
+                cond = ConditionalDef(**cond_data)
+            except Exception:
+                continue  # Malformed — treat as normal task
+
+            source = self._tasks.get(cond.condition_source)
+            if not source or source.status != TaskStatus.COMPLETED:
+                continue
+
+            source_result = results.get(cond.condition_source, "")
+
+            # Evaluate the condition
+            condition_met = await self._evaluate_condition(
+                cond.condition_type,
+                cond.condition_value,
+                source_result,
+                llm_judge_fn,
+            )
+
+            # Mark the conditional node itself as completed
+            task.status = TaskStatus.COMPLETED
+            task.result = f"Condition evaluated: {'TRUE' if condition_met else 'FALSE'}"
+            results[task.id] = task.result
+
+            # Activate chosen branch, skip the other
+            active_ids = cond.if_true if condition_met else cond.if_false
+            skipped_ids = cond.if_false if condition_met else cond.if_true
+
+            for tid in skipped_ids:
+                t = self._tasks.get(tid)
+                if t and t.status == TaskStatus.PENDING:
+                    t.status = TaskStatus.SKIPPED
+                    t.result = "Skipped — conditional branch not taken"
+
+    async def evaluate_loop(
+        self,
+        task: Task,
+        results: dict[str, str],
+        llm_judge_fn,
+        max_cap: int = 5,
+    ) -> bool:
+        """Check loop condition on a just-completed task. Returns True if retrying."""
+        loop_data = task.metadata.get("loop")
+        if not loop_data or not isinstance(loop_data, dict):
+            return False
+
+        try:
+            loop = LoopDef(**loop_data)
+        except Exception:
+            return False
+
+        effective_max = min(loop.max_iterations, max_cap)
+        current = self._iteration_counts.get(task.id, 0)
+
+        if current >= effective_max:
+            task.metadata["loop_exhausted"] = True
+            return False
+
+        task_result = results.get(task.id, "")
+        condition_met = await self._evaluate_condition(
+            loop.condition_type,
+            loop.condition_value,
+            task_result,
+            llm_judge_fn,
+        )
+
+        if condition_met:
+            # Success — no retry needed
+            return False
+
+        # Retry: reset this task and any extra loop tasks
+        self._iteration_counts[task.id] = current + 1
+        tasks_to_reset = [task.id] + list(loop.loop_task_ids)
+        for tid in tasks_to_reset:
+            t = self._tasks.get(tid)
+            if t:
+                t.status = TaskStatus.PENDING
+                t.result = None
+                results.pop(tid, None)
+
+        return True
+
+    @staticmethod
+    async def _evaluate_condition(
+        condition_type: str,
+        condition_value: str,
+        source_result: str,
+        llm_judge_fn,
+    ) -> bool:
+        """Evaluate a condition against a task result."""
+        if condition_type == "contains":
+            return condition_value.lower() in source_result.lower()
+        elif condition_type == "equals":
+            return source_result.strip() == condition_value
+        elif condition_type == "llm_judge":
+            if llm_judge_fn:
+                return await llm_judge_fn(source_result, condition_value)
+            return False
+        return False
 
 
 class Orchestrator:
@@ -258,6 +403,9 @@ class Orchestrator:
                         t.result = "Skipped — session budget exceeded"
                 break
 
+            # Evaluate any conditional nodes whose sources are done
+            await self.dag.evaluate_conditionals(results, self._llm_judge)
+
             ready = self.dag.ready_tasks()
             if not ready:
                 # Check for deadlock
@@ -277,6 +425,21 @@ class Orchestrator:
                 coros.append(self._execute_task(task, results))
 
             await asyncio.gather(*coros)
+
+            # Evaluate loop conditions on just-completed tasks
+            for task in batch:
+                if task.status == TaskStatus.COMPLETED and "loop" in task.metadata:
+                    retrying = await self.dag.evaluate_loop(
+                        task, results, self._llm_judge,
+                        max_cap=self.config.agents.max_loop_iterations,
+                    )
+                    if retrying:
+                        iteration = self.dag._iteration_counts.get(task.id, 0)
+                        self.trace.thought(
+                            "orchestrator",
+                            f"Task [{task.id[:6]}] loop retry {iteration} — "
+                            f"condition not met, retrying",
+                        )
 
         # Phase 3: Synthesize results
         final = await self._synthesize(user_request, results)
@@ -338,6 +501,21 @@ class Orchestrator:
             '"dependencies": []},\n  ...\n]\n\n'
             "Dependencies are indices (0-based) of tasks that must complete first.\n"
             "Keep it minimal — don't over-decompose.\n\n"
+            "ADVANCED FEATURES (use only when truly needed):\n\n"
+            "1. CONDITIONAL BRANCHING — add a task with role \"conditional\" to make decisions:\n"
+            '   {"description": "Check if tests pass", "role": "conditional", '
+            '"dependencies": [1],\n'
+            '    "conditional": {"condition_type": "llm_judge", '
+            '"condition_value": "All tests pass", "if_true_indices": [3], '
+            '"if_false_indices": [4]}}\n'
+            "   condition_type can be: \"contains\", \"equals\", or \"llm_judge\"\n"
+            "   The condition is evaluated against the result of the dependency task.\n\n"
+            "2. RETRY LOOP — add a \"loop\" key to retry a task until a condition is met:\n"
+            '   {"description": "Fix and test code", "role": "coder", '
+            '"dependencies": [0],\n'
+            '    "loop": {"max_iterations": 3, "condition_type": "llm_judge", '
+            '"condition_value": "Code passes all tests"}}\n'
+            "   The task will be re-run up to max_iterations times if the condition is NOT met.\n\n"
             f"{history_block}"
             f"User request: {request}"
         )
@@ -383,10 +561,75 @@ class Orchestrator:
                 if 0 <= idx < len(tasks) and idx != i:
                     tasks[i].dependencies.append(tasks[idx].id)
 
+        # Resolve conditional branching metadata
+        for i, td in enumerate(task_defs):
+            cond = td.get("conditional")
+            if cond and isinstance(cond, dict):
+                # Resolve branch indices to task IDs
+                if_true_ids = []
+                for idx in cond.get("if_true_indices", []):
+                    if 0 <= idx < len(tasks):
+                        if_true_ids.append(tasks[idx].id)
+                if_false_ids = []
+                for idx in cond.get("if_false_indices", []):
+                    if 0 <= idx < len(tasks):
+                        if_false_ids.append(tasks[idx].id)
+
+                # The condition source is the first dependency
+                condition_source = tasks[i].dependencies[0] if tasks[i].dependencies else ""
+
+                tasks[i].metadata["conditional"] = {
+                    "condition_source": condition_source,
+                    "condition_type": cond.get("condition_type", "llm_judge"),
+                    "condition_value": cond.get("condition_value", ""),
+                    "if_true": if_true_ids,
+                    "if_false": if_false_ids,
+                }
+
+            # Resolve loop metadata
+            loop = td.get("loop")
+            if loop and isinstance(loop, dict):
+                loop_task_ids = []
+                for idx in loop.get("loop_task_indices", []):
+                    if 0 <= idx < len(tasks):
+                        loop_task_ids.append(tasks[idx].id)
+
+                tasks[i].metadata["loop"] = {
+                    "max_iterations": loop.get("max_iterations", 3),
+                    "condition_type": loop.get("condition_type", "llm_judge"),
+                    "condition_value": loop.get("condition_value", ""),
+                    "loop_task_ids": loop_task_ids,
+                }
+
         return tasks
+
+    async def _llm_judge(self, result_text: str, condition: str) -> bool:
+        """Ask the fast model whether *result_text* satisfies *condition*."""
+        prompt = (
+            "You are a strict evaluator. Does the following result satisfy the condition?\n\n"
+            f"CONDITION: {condition}\n\n"
+            f"RESULT:\n{result_text[:2000]}\n\n"
+            "Answer with exactly YES or NO."
+        )
+        text, _, usage = await chat_completion(
+            model=self.config.models.fast,
+            messages=[Message(role=Role.USER, content=prompt)],
+            temperature=0.0,
+            max_tokens=8,
+            bedrock_config=self.config.models.bedrock if self.config.models.bedrock.enabled else None,
+        )
+        self._session_tokens += usage.get("total_tokens", 0)
+        return text.strip().upper().startswith("YES")
 
     async def _execute_task(self, task: Task, results: dict[str, str]) -> None:
         """Execute a single task with the appropriate specialist agent."""
+        # Conditional nodes are resolved by evaluate_conditionals, not agent execution
+        if "conditional" in task.metadata:
+            task.status = TaskStatus.COMPLETED
+            task.result = "Conditional node — awaiting evaluation"
+            results[task.id] = task.result
+            return
+
         role_name = task.metadata.get("role", "general")
         agent = self._spawn_agent(role_name)
         task.assigned_agent = agent.id

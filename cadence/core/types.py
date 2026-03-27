@@ -87,6 +87,7 @@ class TaskStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     BLOCKED = "blocked"
+    SKIPPED = "skipped"
 
 
 class Task(BaseModel):
@@ -102,6 +103,36 @@ class Task(BaseModel):
     created_at: float = Field(default_factory=time.time)
     completed_at: float | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+# --- Conditional & Loop definitions (stored in Task.metadata) ---
+
+class ConditionalDef(BaseModel):
+    """Defines conditional branching based on a dependency task's result.
+
+    Stored in ``task.metadata["conditional"]``. The orchestrator evaluates the
+    condition after ``condition_source`` completes and activates one branch
+    while skipping the other.
+    """
+    condition_source: str              # Task ID whose result is evaluated
+    condition_type: str = "contains"   # "contains", "equals", or "llm_judge"
+    condition_value: str = ""          # Value to test against
+    if_true: list[str] = Field(default_factory=list)   # Task IDs to activate
+    if_false: list[str] = Field(default_factory=list)   # Task IDs to activate
+
+
+class LoopDef(BaseModel):
+    """Defines retry/loop behaviour for a task or task group.
+
+    Stored in ``task.metadata["loop"]``. After the task completes, the
+    orchestrator checks the success condition. If it is NOT met and
+    iterations remain, the task (and optionally related tasks) are reset
+    to PENDING for another attempt.
+    """
+    max_iterations: int = 3
+    condition_type: str = "llm_judge"  # Same types as ConditionalDef
+    condition_value: str = ""          # The *success* condition
+    loop_task_ids: list[str] = Field(default_factory=list)  # Extra tasks to re-run (empty = self only)
 
 
 # --- Reasoning trace ---
