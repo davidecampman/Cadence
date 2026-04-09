@@ -213,6 +213,11 @@ async def _compress_history(
                 if agent_app.config.models.bedrock.enabled
                 else None
             ),
+            local_config=(
+                agent_app.config.models.local
+                if agent_app.config.models.local.enabled
+                else None
+            ),
         )
         store.save_session_summary(session_id, summary.strip())
     except Exception:

@@ -257,6 +257,7 @@ class Agent:
                         messages=self._history,
                         tools=None,  # No tools — force a text response
                         bedrock_config=self.config.models.bedrock if self.config.models.bedrock.enabled else None,
+                        local_config=self.config.models.local if self.config.models.local.enabled else None,
                     )
                     self._total_tokens += usage.get("total_tokens", 0)
                     self._history.append(Message(role=Role.ASSISTANT, content=text))
@@ -277,6 +278,7 @@ class Agent:
                 messages=self._history,
                 tools=tool_defs if tool_defs else None,
                 bedrock_config=self.config.models.bedrock if self.config.models.bedrock.enabled else None,
+                local_config=self.config.models.local if self.config.models.local.enabled else None,
             )
             self._total_tokens += usage.get("total_tokens", 0)
 

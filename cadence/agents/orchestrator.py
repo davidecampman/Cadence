@@ -526,6 +526,7 @@ class Orchestrator:
             temperature=0.3,
             max_tokens=1024,
             bedrock_config=self.config.models.bedrock if self.config.models.bedrock.enabled else None,
+            local_config=self.config.models.local if self.config.models.local.enabled else None,
         )
         self._session_tokens += usage.get("total_tokens", 0)
 
@@ -617,6 +618,7 @@ class Orchestrator:
             temperature=0.0,
             max_tokens=8,
             bedrock_config=self.config.models.bedrock if self.config.models.bedrock.enabled else None,
+            local_config=self.config.models.local if self.config.models.local.enabled else None,
         )
         self._session_tokens += usage.get("total_tokens", 0)
         return text.strip().upper().startswith("YES")
@@ -704,6 +706,7 @@ class Orchestrator:
             messages=[Message(role=Role.USER, content=synthesis_prompt)],
             temperature=0.5,
             bedrock_config=self.config.models.bedrock if self.config.models.bedrock.enabled else None,
+            local_config=self.config.models.local if self.config.models.local.enabled else None,
         )
         self._session_tokens += usage.get("total_tokens", 0)
         return text
@@ -724,6 +727,7 @@ class Orchestrator:
             temperature=0.2,
             max_tokens=256,
             bedrock_config=self.config.models.bedrock if self.config.models.bedrock.enabled else None,
+            local_config=self.config.models.local if self.config.models.local.enabled else None,
         )
         self._session_tokens += usage.get("total_tokens", 0)
 
