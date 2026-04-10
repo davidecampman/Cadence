@@ -150,12 +150,17 @@ async def startup():
     agent_app = get_app()
     _original_log = agent_app.trace.log
     agent_app.trace.log = _patched_log
+    # Connect to configured MCP servers
+    await agent_app.connect_mcp_servers()
 
 
 @app.on_event("shutdown")
 async def shutdown():
     from cadence.tools.browser import _shutdown_browser
     await _shutdown_browser()
+    # Disconnect MCP servers
+    agent_app = get_app()
+    await agent_app.disconnect_mcp_servers()
 
 
 async def _compress_history(
@@ -452,6 +457,13 @@ async def get_tools():
         {"name": d.name, "description": d.description, "permission_tier": d.permission_tier}
         for d in defs
     ]
+
+
+@app.get("/api/mcp")
+async def get_mcp_status():
+    """Return connection status for all MCP servers."""
+    agent_app = get_app()
+    return agent_app.mcp_manager.status()
 
 
 @app.get("/api/trace")

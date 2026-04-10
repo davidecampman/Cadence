@@ -110,6 +110,24 @@ knowledge_graph:
   enabled: true                       # Structured knowledge graph
   persist_path: "./data/knowledge_graph.json"  # JSON persistence file
 
+mcp:
+  enabled: false                        # MCP (Model Context Protocol) server integration
+  servers: []                           # List of MCP server definitions
+  # Example servers:
+  # servers:
+  #   - name: "github"
+  #     command: "npx"
+  #     args: ["-y", "@modelcontextprotocol/server-github"]
+  #     env:
+  #       GITHUB_TOKEN: "ghp_..."
+  #   - name: "filesystem"
+  #     command: "npx"
+  #     args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"]
+  #   - name: "remote-server"
+  #     url: "http://localhost:3001/mcp"
+  #     headers:
+  #       Authorization: "Bearer ..."
+
 multimodal:
   enabled: true                       # Multi-modal (image) input support
   max_image_size_mb: 10.0             # Max image size in MB

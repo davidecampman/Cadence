@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from cadence.core.config import Config, load_config
 from cadence.core.checkpoint import CheckpointManager
 from cadence.core.message_bus import MessageBus
@@ -10,12 +12,15 @@ from cadence.agents.orchestrator import Orchestrator
 from cadence.knowledge.graph import KnowledgeGraph
 from cadence.knowledge.store import KnowledgeStore
 from cadence.learning.store import LearningStore
+from cadence.mcp.manager import MCPManager
 from cadence.memory.store import MemoryStore
 from cadence.prompts.evolution import PromptEvolver
 from cadence.prompts.store import PromptEvolutionStore
 from cadence.skills.loader import SkillLoader
 from cadence.routing.router import SmartRouter
 from cadence.tools.base import ToolRegistry
+
+logger = logging.getLogger(__name__)
 from cadence.tools.checkpoint_tools import RequestApprovalTool
 from cadence.tools.code_execution import CodeExecutionTool, ShellTool
 from cadence.tools.database import SqlQueryTool
@@ -92,6 +97,13 @@ class CadenceApp:
         self.knowledge_graph = KnowledgeGraph(
             persist_path=self.config.knowledge_graph.persist_path,
         ) if self.config.knowledge_graph.enabled else None
+
+        # Initialize MCP manager
+        self.mcp_manager = MCPManager()
+        if self.config.mcp.enabled and self.config.mcp.servers:
+            self.mcp_manager.add_servers_from_config(
+                [s.model_dump() for s in self.config.mcp.servers]
+            )
 
         self.tools = self._build_tool_registry()
         self.orchestrator = Orchestrator(
@@ -204,6 +216,27 @@ class CadenceApp:
         ))
 
         return registry
+
+    async def connect_mcp_servers(self) -> dict[str, int]:
+        """Connect to configured MCP servers and bridge their tools into the registry.
+
+        Should be called once after construction (requires async). Returns a dict
+        of ``{server_name: num_tools_registered}``.
+        """
+        if not self.config.mcp.enabled or not self.mcp_manager.servers:
+            return {}
+
+        results = await self.mcp_manager.connect_all(self.tools)
+        for name, count in results.items():
+            if count > 0:
+                logger.info("MCP server '%s': registered %d tools", name, count)
+            else:
+                logger.warning("MCP server '%s': no tools registered", name)
+        return results
+
+    async def disconnect_mcp_servers(self) -> None:
+        """Gracefully disconnect all MCP servers."""
+        await self.mcp_manager.disconnect_all()
 
     async def run(
         self,
