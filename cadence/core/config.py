@@ -129,6 +129,22 @@ class KnowledgeGraphConfig(BaseModel):
     persist_path: str = "./data/knowledge_graph.json"
 
 
+class MCPServerDef(BaseModel):
+    """Definition of a single MCP server to connect to."""
+    name: str
+    command: str | None = None              # Executable for stdio transport
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    url: str | None = None                  # URL for SSE transport
+    headers: dict[str, str] = Field(default_factory=dict)
+
+
+class MCPConfig(BaseModel):
+    """Settings for MCP (Model Context Protocol) server integration."""
+    enabled: bool = False
+    servers: list[MCPServerDef] = Field(default_factory=list)
+
+
 class MultiModalConfig(BaseModel):
     """Settings for multi-modal (image) input."""
     enabled: bool = True
@@ -150,6 +166,7 @@ class Config(BaseModel):
     checkpoints: CheckpointConfig = Field(default_factory=CheckpointConfig)
     learning: LearningConfig = Field(default_factory=LearningConfig)
     knowledge_graph: KnowledgeGraphConfig = Field(default_factory=KnowledgeGraphConfig)
+    mcp: MCPConfig = Field(default_factory=MCPConfig)
     multimodal: MultiModalConfig = Field(default_factory=MultiModalConfig)
 
 

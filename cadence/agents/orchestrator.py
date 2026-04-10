@@ -6,6 +6,11 @@ import asyncio
 import time
 from typing import Any
 
+from cadence.agents.collaboration import (
+    CollaborationEngine,
+    CollaborationMode,
+    CollaborationResult,
+)
 from cadence.core.agent import Agent
 from cadence.core.checkpoint import CheckpointManager
 from cadence.core.config import Config, get_config
@@ -313,6 +318,15 @@ class Orchestrator:
         else:
             self.prompt_evolver = None
 
+        # Collaboration engine for structured multi-agent patterns
+        self.collaboration = CollaborationEngine(
+            tool_registry=self.tools,
+            trace=self.trace,
+            config=self.config,
+            skill_loader=self.skill_loader,
+            prompt_evolver=self.prompt_evolver,
+        )
+
     @property
     def session_tokens(self) -> int:
         """Total tokens consumed across all agents in this session."""
@@ -368,8 +382,16 @@ class Orchestrator:
                 tips = "; ".join(i.recommendation for i in insights[:2])
                 learning_context = f"\n[Learning from past tasks ({task_type})]: {tips}"
 
-        # Phase 1: Plan — decompose into tasks
-        tasks = await self._plan(user_request + learning_context)
+        # Phase 1: Plan — decompose into tasks (or select collaboration mode)
+        plan_result = await self._plan(user_request + learning_context)
+
+        # Check if planner selected a collaboration pattern
+        if isinstance(plan_result, CollaborationResult):
+            self._session_tokens += self.collaboration._total_tokens
+            self.collaboration._total_tokens = 0
+            return plan_result.final_answer
+
+        tasks = plan_result
 
         if not tasks:
             # Simple request, no decomposition needed — just run directly
@@ -490,8 +512,8 @@ class Orchestrator:
             + "\n\n"
         )
 
-    async def _plan(self, request: str) -> list[Task]:
-        """Use the fast model to decompose a request into tasks."""
+    async def _plan(self, request: str) -> list[Task] | CollaborationResult:
+        """Use the fast model to decompose a request into tasks or select a collaboration mode."""
         history_block = self._format_history_block()
         planning_prompt = (
             "You are a task planner. Given a user request, decide if it needs to be broken "
@@ -516,6 +538,13 @@ class Orchestrator:
             '    "loop": {"max_iterations": 3, "condition_type": "llm_judge", '
             '"condition_value": "Code passes all tests"}}\n'
             "   The task will be re-run up to max_iterations times if the condition is NOT met.\n\n"
+            "3. COLLABORATION MODE — instead of tasks, return a collaboration pattern:\n"
+            '   {"collaboration": "debate"} — two agents argue opposing sides, a judge synthesizes\n'
+            '   {"collaboration": "peer_review"} — one produces, one reviews, iterate until approved\n'
+            '   {"collaboration": "consensus", "num_proposers": 3} — N agents solve independently, best selected\n'
+            "   Use debate for controversial/complex decisions, peer_review for code/writing quality,\n"
+            "   consensus for creative tasks where diverse approaches help.\n"
+            "   When using collaboration, return ONLY the collaboration object, not a task array.\n\n"
             f"{history_block}"
             f"User request: {request}"
         )
@@ -536,6 +565,29 @@ class Orchestrator:
         # Parse task list from LLM response
         import json
         import re
+
+        # Check for collaboration mode response
+        collab_match = re.search(r"\{[^}]*\"collaboration\"[^}]*\}", text, re.DOTALL)
+        if collab_match:
+            try:
+                collab_def = json.loads(collab_match.group())
+                mode_str = collab_def.get("collaboration", "")
+                if mode_str in ("debate", "peer_review", "consensus"):
+                    self.trace.thought(
+                        "orchestrator",
+                        f"Planner selected collaboration mode: {mode_str}",
+                    )
+                    # Strip learning context suffix to get the raw request
+                    raw_request = request.split("\n[Learning from past tasks")[0]
+                    return await self.collaboration.run(
+                        mode=CollaborationMode(mode_str),
+                        task=raw_request,
+                        max_rounds=collab_def.get("max_rounds", 3),
+                        num_proposers=collab_def.get("num_proposers", 3),
+                        conversation_history=self._conversation_history,
+                    )
+            except (json.JSONDecodeError, ValueError):
+                pass  # Not a valid collaboration spec — fall through to task parsing
 
         # Extract JSON from response (may be wrapped in markdown)
         json_match = re.search(r"\[.*\]", text, re.DOTALL)
