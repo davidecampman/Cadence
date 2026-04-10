@@ -236,7 +236,7 @@ def _maybe_reroute_model(model: str) -> str:
     """Auto-prefix a model with ``openrouter/`` when the direct provider key
     is missing but an OpenRouter key is available.
     """
-    if "/" in model:
+    if "/" in model:  # Already prefixed (openrouter/, local/, bedrock/, etc.)
         return model
 
     openrouter_key = os.environ.get("OPENROUTER_API_KEY")
@@ -324,14 +324,18 @@ def _strip_bedrock_prefix(model: str) -> str:
     return model
 
 
-def supports_native_tools(model: str) -> bool:
+def supports_native_tools(model: str, local_config=None) -> bool:
     """Check if a model likely supports native tool_use API."""
+    if model.startswith("local/"):
+        return local_config.supports_tool_use if local_config else False
     model_lower = model.lower()
     return any(model_lower.startswith(p) for p in _NATIVE_TOOL_USE_PREFIXES)
 
 
 def _get_provider(model: str) -> str:
     """Determine which SDK path to use for a given model string."""
+    if model.startswith("local/"):
+        return "local"
     if model.startswith("bedrock/"):
         return "bedrock"
     if model.startswith("claude-"):
@@ -350,11 +354,16 @@ async def _openai_completion(
     tools: list[ToolDefinition] | None,
     temperature: float,
     max_tokens: int,
+    local_config=None,
 ) -> tuple[str, list[ToolCall], dict[str, Any]]:
     """Call an OpenAI-compatible endpoint and return (text, tool_calls, usage)."""
 
     # Determine base URL and API key
-    if model.startswith("openrouter/"):
+    if model.startswith("local/"):
+        base_url = local_config.base_url if local_config else "http://localhost:11434/v1"
+        api_key = local_config.api_key if local_config else "local"
+        api_model = model[len("local/"):]
+    elif model.startswith("openrouter/"):
         base_url = "https://openrouter.ai/api/v1"
         api_key = os.environ.get("OPENROUTER_API_KEY", "")
         api_model = model[len("openrouter/"):]
@@ -373,7 +382,7 @@ async def _openai_completion(
         "max_tokens": max_tokens,
     }
 
-    use_native_tools = tools and supports_native_tools(model)
+    use_native_tools = tools and supports_native_tools(model, local_config=local_config)
     if use_native_tools:
         kwargs["tools"] = _tools_to_dicts(tools)
         kwargs["tool_choice"] = "auto"
@@ -497,10 +506,12 @@ async def chat_completion(
     temperature: float = 0.7,
     max_tokens: int = 4096,
     bedrock_config=None,
+    local_config=None,
 ) -> tuple[str, list[ToolCall], dict[str, Any]]:
     """Call an LLM and return (text_response, tool_calls, usage_metadata).
 
     Automatically dispatches to the correct SDK based on the model string:
+    - ``local/...`` → OpenAI SDK with local base URL (Ollama, LM Studio, vLLM, etc.)
     - ``bedrock/...`` → Anthropic SDK with Bedrock transport
     - ``claude-...`` with ANTHROPIC_API_KEY → Anthropic SDK directly
     - ``openrouter/...`` → OpenAI SDK with OpenRouter base URL
@@ -523,4 +534,7 @@ async def chat_completion(
             model, messages, tools, temperature, max_tokens,
             provider=provider, bedrock_config=bedrock_config,
         )
-    return await _openai_completion(model, messages, tools, temperature, max_tokens)
+    return await _openai_completion(
+        model, messages, tools, temperature, max_tokens,
+        local_config=local_config,
+    )

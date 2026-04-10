@@ -153,6 +153,11 @@ class PromptEvolver:
                 if self.config.models.bedrock.enabled
                 else None
             ),
+            local_config=(
+                self.config.models.local
+                if self.config.models.local.enabled
+                else None
+            ),
         )
 
         if "NO_CHANGES" in text.upper():

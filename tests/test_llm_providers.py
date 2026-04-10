@@ -37,6 +37,10 @@ from cadence.core.llm import (
 # ---------------------------------------------------------------------------
 
 class TestGetProvider:
+    def test_local_prefix(self):
+        assert _get_provider("local/llama3.1:8b") == "local"
+        assert _get_provider("local/mistral:7b") == "local"
+
     def test_bedrock_prefix(self):
         assert _get_provider("bedrock/converse/us.anthropic.claude-v1:0") == "bedrock"
         assert _get_provider("bedrock/anthropic.claude-3-haiku") == "bedrock"
@@ -55,6 +59,7 @@ class TestMaybeRerouteModel:
     def test_already_prefixed_unchanged(self):
         assert _maybe_reroute_model("openrouter/anthropic/claude-3-haiku") == "openrouter/anthropic/claude-3-haiku"
         assert _maybe_reroute_model("bedrock/converse/model") == "bedrock/converse/model"
+        assert _maybe_reroute_model("local/llama3.1:8b") == "local/llama3.1:8b"
 
     def test_reroute_when_openrouter_key_present(self, monkeypatch):
         monkeypatch.setenv("OPENROUTER_API_KEY", "or-key")
@@ -483,3 +488,73 @@ class TestChatCompletionBedrock:
         assert create_kwargs["system"] == "Be brief."
         # System message should NOT appear in the messages list
         assert all(m["role"] != "system" for m in create_kwargs["messages"])
+
+
+# ---------------------------------------------------------------------------
+# Local model provider
+# ---------------------------------------------------------------------------
+
+class TestLocalModelProvider:
+    """Tests for local model (Ollama, LM Studio, vLLM, etc.) support."""
+
+    def test_local_model_not_rerouted(self, monkeypatch):
+        """local/ prefix should never be rerouted to OpenRouter."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "or-key")
+        assert _maybe_reroute_model("local/llama3.1:8b") == "local/llama3.1:8b"
+
+    def test_local_model_provider_detection(self):
+        assert _get_provider("local/llama3.1:8b") == "local"
+        assert _get_provider("local/codellama:13b") == "local"
+        assert _get_provider("local/mistral:7b-instruct") == "local"
+
+    def test_local_model_no_native_tools_by_default(self):
+        """Local models should not claim native tool support without config."""
+        assert not supports_native_tools("local/llama3.1:8b")
+
+    def test_local_model_native_tools_with_config(self):
+        """Local models with supports_tool_use=True should report native tool support."""
+        from cadence.core.config import LocalModelsConfig
+        config = LocalModelsConfig(enabled=True, supports_tool_use=True)
+        assert supports_native_tools("local/llama3.1:8b", local_config=config)
+
+    @pytest.mark.asyncio
+    async def test_local_model_completion(self):
+        """Local model calls should use the configured base_url and strip the local/ prefix."""
+        from cadence.core.config import LocalModelsConfig
+
+        local_config = LocalModelsConfig(
+            enabled=True,
+            base_url="http://localhost:11434/v1",
+            api_key="local",
+        )
+
+        mock_response = SimpleNamespace(
+            choices=[SimpleNamespace(
+                message=SimpleNamespace(content="Hello from local!", tool_calls=None),
+            )],
+            usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        )
+        mock_create = AsyncMock(return_value=mock_response)
+
+        with patch("cadence.core.llm.openai.AsyncOpenAI") as MockClient:
+            MockClient.return_value.chat.completions.create = mock_create
+
+            text, tool_calls, usage = await chat_completion(
+                model="local/llama3.1:8b",
+                messages=[Message(role=Role.USER, content="Hi")],
+                local_config=local_config,
+            )
+
+        # Verify the client was created with the local base_url
+        MockClient.assert_called_once_with(
+            base_url="http://localhost:11434/v1",
+            api_key="local",
+        )
+
+        # Verify the model name had the local/ prefix stripped
+        create_kwargs = mock_create.call_args[1]
+        assert create_kwargs["model"] == "llama3.1:8b"
+
+        assert text == "Hello from local!"
+        assert tool_calls == []
+        assert usage["total_tokens"] == 15

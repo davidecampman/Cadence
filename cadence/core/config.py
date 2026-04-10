@@ -23,12 +23,21 @@ class BedrockConfig(BaseModel):
     api_key: str | None = None  # Long-term Bedrock API key (alternative to IAM credentials)
 
 
+class LocalModelsConfig(BaseModel):
+    """Local model provider configuration (Ollama, LM Studio, vLLM, etc.)."""
+    enabled: bool = False
+    base_url: str = "http://localhost:11434/v1"  # Ollama default OpenAI-compatible endpoint
+    api_key: str = "local"  # Placeholder; most local servers ignore this
+    supports_tool_use: bool = False  # Whether the local model supports native tool calling
+
+
 class ModelsConfig(BaseModel):
     strong: str = "claude-sonnet-4-5-20250514"
     fast: str = "claude-haiku-4-5-20251001"
     embedding: str = "text-embedding-3-small"
     fallback_chain: list[str] = Field(default_factory=lambda: ["gpt-4o", "claude-sonnet-4-5-20250514"])
     bedrock: BedrockConfig = Field(default_factory=BedrockConfig)
+    local: LocalModelsConfig = Field(default_factory=LocalModelsConfig)
 
 
 class BudgetConfig(BaseModel):

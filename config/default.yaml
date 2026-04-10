@@ -26,6 +26,16 @@ models:
     # secret_access_key: "..."    # Optional: explicit AWS secret access key
     # api_key: "..."              # Optional: long-term Bedrock API key (alternative to IAM)
 
+  # Local model configuration (Ollama, LM Studio, vLLM, llama.cpp, etc.)
+  # To use local models, set enabled: true and prefix model names with "local/".
+  # e.g., strong: "local/llama3.1:70b"  fast: "local/llama3.1:8b"
+  # Any OpenAI-compatible local server works (Ollama, LM Studio, vLLM, text-generation-webui).
+  local:
+    enabled: false
+    base_url: "http://localhost:11434/v1"   # Ollama default; LM Studio uses http://localhost:1234/v1
+    api_key: "local"                        # Placeholder; most local servers ignore this
+    supports_tool_use: false                # Set to true if your model supports function calling
+
 budget:
   max_tokens_per_task: 100000       # Per-task token ceiling
   max_tokens_per_session: 500000    # Per-session token ceiling
