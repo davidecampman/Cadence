@@ -40,7 +40,7 @@ class ReadFileTool(Tool):
         if not p.is_file():
             return f"Not a file: {path}"
 
-        text = p.read_text(errors="replace")
+        text = p.read_text(encoding="utf-8", errors="replace")
         lines = text.splitlines()
 
         if offset:
@@ -70,7 +70,7 @@ class WriteFileTool(Tool):
         if not _is_write_safe(p):
             return f"Write blocked: path resolves inside a protected system directory ({p.resolve()})"
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content)
+        p.write_text(content, encoding="utf-8")
         abs_path = str(p.resolve())
         return (
             f"Wrote {len(content)} bytes to {path}\n"

@@ -26,7 +26,7 @@ class TraceLogger:
         self._steps.append(step)
 
         if self._file_path:
-            with open(self._file_path, "a") as f:
+            with open(self._file_path, "a", encoding="utf-8") as f:
                 f.write(step.model_dump_json() + "\n")
 
         if self._console:
@@ -85,4 +85,8 @@ def _print_step(step: TraceStep) -> None:
     icon = _STEP_ICONS.get(step.step_type, "•")
     agent = step.agent_id[:12]
     preview = step.content[:200].replace("\n", " ")
-    print(f"  {icon} [{agent}] {preview}")
+    try:
+        print(f"  {icon} [{agent}] {preview}")
+    except UnicodeEncodeError:
+        safe = f"  {icon} [{agent}] {preview}".encode("ascii", errors="replace").decode("ascii")
+        print(safe)

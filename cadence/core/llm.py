@@ -75,7 +75,23 @@ def _messages_to_dicts(messages: list[Message]) -> list[dict[str, Any]]:
     for msg in messages:
         content = msg.content
         if hasattr(msg, "content_blocks") and msg.content_blocks:
-            content = msg.content_blocks
+            # Convert Anthropic-format image blocks to OpenAI image_url blocks
+            converted: list[dict[str, Any]] = []
+            for block in msg.content_blocks:
+                if block.get("type") == "image" and "source" in block:
+                    src = block["source"]
+                    if src.get("type") == "base64":
+                        converted.append({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{src['media_type']};base64,{src['data']}",
+                            },
+                        })
+                    else:
+                        converted.append(block)
+                else:
+                    converted.append(block)
+            content = converted
 
         d: dict[str, Any] = {"role": msg.role.value, "content": content}
         if msg.name:

@@ -189,12 +189,15 @@ class Agent:
 
         # Add the current user message, with images if provided
         if images:
+            # Build content blocks in Anthropic format (canonical internal format)
             content_blocks: list[dict] = [{"type": "text", "text": task}]
             for img in images:
                 content_blocks.append({
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:{img['media_type']};base64,{img['data']}",
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": img["media_type"],
+                        "data": img["data"],
                     },
                 })
             self._history.append(Message(
