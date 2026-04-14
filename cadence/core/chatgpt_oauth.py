@@ -51,9 +51,10 @@ DEFAULT_SCOPES = "openid profile email offline_access"
 # Where we persist encrypted OAuth credentials
 _OAUTH_PATH = _DATA_DIR / "chatgpt_oauth.enc"
 
-# Default local callback port (same as the Cadence API server)
+# Default local callback matching the Codex CLI's registered redirect pattern.
+# OpenAI whitelists "http://localhost:{port}/auth/callback" for this client ID.
 DEFAULT_CALLBACK_PORT = 5173
-DEFAULT_CALLBACK_URL = "http://127.0.0.1:5173/oauth/callback"
+DEFAULT_CALLBACK_URL = "http://localhost:5173/auth/callback"
 
 # ---------------------------------------------------------------------------
 # Codex API endpoint (different from the regular OpenAI API)
