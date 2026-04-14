@@ -31,10 +31,13 @@ $python = $null
 foreach ($candidate in @('python3', 'python')) {
     $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
     if ($cmd) {
-        $verStr = & $candidate -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>$null
-        if ($verStr -and ([version]$verStr -ge $MinPython)) {
-            $python = $candidate
-            break
+        $verOutput = & $candidate --version 2>&1
+        if ($verOutput -match '(\d+\.\d+)') {
+            $verStr = $Matches[1]
+            if ([version]$verStr -ge $MinPython) {
+                $python = $candidate
+                break
+            }
         }
     }
 }

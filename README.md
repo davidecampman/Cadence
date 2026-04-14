@@ -83,7 +83,32 @@ graph TB
 - Python 3.11+
 - Node.js 22+ (for frontend)
 
-### Installation
+### One-command setup
+
+The start scripts handle venv creation, dependency installation, frontend build, and server launch automatically.
+
+**Linux / macOS (bash):**
+
+```bash
+export ANTHROPIC_API_KEY="your-key-here"
+./start.sh
+```
+
+**Windows (PowerShell):**
+
+```powershell
+$env:ANTHROPIC_API_KEY = "your-key-here"
+.\start.ps1
+```
+
+Both scripts will:
+1. Verify Python >= 3.11 and Node.js >= 18
+2. Create and activate a `.venv` virtual environment
+3. Install Python dependencies (`pip install -e .`)
+4. Install and build the frontend (`npm ci` / `npm run build`)
+5. Start the Cadence server at http://localhost:8000
+
+### Manual installation
 
 ```bash
 # Install Python package in dev mode
