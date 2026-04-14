@@ -666,7 +666,10 @@ async def oauth_chatgpt_callback(req: OAuthCallbackRequest):
 @app.get("/api/oauth/chatgpt/status")
 async def oauth_chatgpt_status():
     """Check the current ChatGPT OAuth authorization status."""
-    return get_oauth_status()
+    status = get_oauth_status()
+    # Include fallback info so the UI can show it
+    status["has_api_key_fallback"] = bool(os.environ.get("OPENAI_API_KEY"))
+    return status
 
 
 @app.post("/api/oauth/chatgpt/revoke")

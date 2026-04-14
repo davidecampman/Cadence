@@ -1439,12 +1439,20 @@ function App() {
                   )}
                 </div>
 
-                {/* ChatGPT OAuth */}
+                {/* ChatGPT OAuth (Codex) */}
                 <div className="config-section oauth-section">
-                  <h3>ChatGPT OAuth</h3>
+                  <h3>ChatGPT OAuth (Codex)</h3>
                   <p className="config-hint">
-                    Connect your ChatGPT Plus or Pro subscription to use OpenAI models
-                    at your subscription's flat rate &mdash; no per-token API billing.
+                    Connect your ChatGPT Plus or Pro subscription to use OpenAI
+                    Codex models via the Codex Responses API &mdash; at your
+                    subscription's flat rate instead of per-token API billing.
+                  </p>
+                  <p className="config-hint" style={{ marginTop: 4 }}>
+                    <strong>How it works:</strong> When connected, OpenAI model
+                    requests are routed through the Codex endpoint
+                    (chatgpt.com/backend-api/codex/responses) using the Responses
+                    API format. If your Codex quota is exhausted, Cadence
+                    automatically falls back to your OpenAI API key (if configured).
                   </p>
                   {oauthStatus?.authorized ? (
                     <div className="oauth-status-connected">
@@ -1467,6 +1475,13 @@ function App() {
                           </span>
                         </div>
                       )}
+                      <div className="oauth-detail">
+                        <span className="config-hint">
+                          Fallback: {keysInfo?.providers?.openai?.has_key
+                            ? 'OpenAI API key configured (will use if Codex quota runs out)'
+                            : 'No API key fallback \u2014 add an OpenAI API key above for uninterrupted access'}
+                        </span>
+                      </div>
                       <div className="oauth-actions">
                         <button
                           className="oauth-refresh-btn"
@@ -1491,7 +1506,10 @@ function App() {
                       <p className="config-hint" style={{ margin: '8px 0' }}>
                         Click below to authorize Cadence with your OpenAI account.
                         You'll be redirected to OpenAI's login page.
-                        Requires a ChatGPT Plus ($20/mo) or Pro ($200/mo) subscription.
+                        Requires a ChatGPT Plus ($20/mo) or Pro ($200/mo)
+                        subscription. We recommend also keeping an OpenAI API key
+                        configured above as a fallback for when your Codex quota
+                        runs out.
                       </p>
                       <button
                         className="oauth-connect-btn"

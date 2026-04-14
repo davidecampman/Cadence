@@ -53,6 +53,18 @@ _OAUTH_PATH = _DATA_DIR / "chatgpt_oauth.enc"
 DEFAULT_CALLBACK_PORT = 5173
 DEFAULT_CALLBACK_URL = "http://127.0.0.1:5173/oauth/callback"
 
+# ---------------------------------------------------------------------------
+# Codex API endpoint (different from the regular OpenAI API)
+# ---------------------------------------------------------------------------
+# When authenticated via ChatGPT OAuth, the Codex CLI uses a special endpoint
+# at chatgpt.com, NOT api.openai.com.  The Responses API format is used
+# (input + instructions), not Chat Completions (messages).
+CODEX_API_BASE_URL = "https://chatgpt.com/backend-api"
+CODEX_RESPONSES_PATH = "/codex/responses"
+
+# Default Codex model available via subscription OAuth
+CODEX_DEFAULT_MODEL = "gpt-5.3-codex"
+
 
 # ---------------------------------------------------------------------------
 # PKCE helpers
