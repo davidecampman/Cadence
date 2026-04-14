@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import {
-  sendMessage,
+  sendMessageStream,
+  cancelChat,
   fetchConfig,
   updateConfig,
   fetchTools,
@@ -165,7 +166,12 @@ function App() {
   });
   const [_backendReady, setBackendReady] = useState(false);
   const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
+  // Per-chat loading: tracks which chat IDs are currently processing
+  const [loadingChats, setLoadingChats] = useState<Set<string>>(new Set());
+  // Per-chat streaming status line shown below the typing indicator
+  const [streamingStatus, setStreamingStatus] = useState<Record<string, string>>({});
+  // AbortControllers keyed by chatId so each chat's request can be cancelled
+  const abortControllersRef = useRef<Record<string, AbortController>>({});
   const [traceSteps, setTraceSteps] = useState<TraceStep[]>([]);
   const [traceOpen, setTraceOpen] = useState(false);
   const [online, setOnline] = useState(false);
@@ -240,6 +246,8 @@ function App() {
   // Derived: active chat and its messages
   const activeChat = chats.find((c) => c.id === activeChatId) ?? null;
   const messages = activeChat?.messages ?? [];
+  // loading is true only for the currently-visible chat
+  const loading = activeChatId ? loadingChats.has(activeChatId) : false;
 
   // Always keep localStorage as a fallback cache
   useEffect(() => {
@@ -710,9 +718,22 @@ function App() {
     }
   }, [addFiles]);
 
+  const handleCancel = useCallback(() => {
+    if (!activeChatId) return;
+    const controller = abortControllersRef.current[activeChatId];
+    if (controller) {
+      controller.abort();
+      delete abortControllersRef.current[activeChatId];
+    }
+    setLoadingChats((prev) => { const next = new Set(prev); next.delete(activeChatId); return next; });
+    setStreamingStatus((prev) => { const next = { ...prev }; delete next[activeChatId]; return next; });
+  }, [activeChatId]);
+
   const handleSend = useCallback(async (text?: string) => {
     const msg = text || input.trim();
-    if ((!msg && attachments.length === 0) || loading) return;
+    // Block send only for the active chat if it's already loading
+    const activeIsLoading = activeChatId ? loadingChats.has(activeChatId) : false;
+    if ((!msg && attachments.length === 0) || activeIsLoading) return;
 
     const currentAttachments = [...attachments];
     setInput('');
@@ -754,13 +775,13 @@ function App() {
       prev.map((c) => {
         if (c.id !== chatId) return c;
         const updated = { ...c, messages: [...c.messages, userMsg] };
-        if (c.messages.length === 0) {
-          updated.title = chatTitle([userMsg]);
-        }
+        if (c.messages.length === 0) updated.title = chatTitle([userMsg]);
         return updated;
       })
     );
-    setLoading(true);
+
+    // Mark this specific chat as loading
+    setLoadingChats((prev) => new Set(prev).add(chatId!));
 
     // Persist user message to backend
     addChatMessage(chatId, {
@@ -775,12 +796,33 @@ function App() {
 
     const currentSessionId = chats.find((c) => c.id === chatId)?.sessionId;
 
+    // Create an AbortController so the user can cancel
+    const controller = new AbortController();
+    abortControllersRef.current[chatId] = controller;
+
+    const clearLoading = () => {
+      setLoadingChats((prev) => { const next = new Set(prev); next.delete(chatId!); return next; });
+      setStreamingStatus((prev) => { const next = { ...prev }; delete next[chatId!]; return next; });
+      delete abortControllersRef.current[chatId!];
+    };
+
     try {
-      const res: ChatResponse = await sendMessage(
+      const res = await sendMessageStream(
         msg || 'Please look at the attached image(s).',
+        {
+          onThinking: (_thought, _agentId) => {
+            // Thinking steps arrive via WebSocket too; use status line for live feedback
+            setStreamingStatus((prev) => ({ ...prev, [chatId!]: 'Thinking...' }));
+          },
+          onStatus: (status, _agentId) => {
+            setStreamingStatus((prev) => ({ ...prev, [chatId!]: status }));
+          },
+        },
         currentSessionId,
         currentAttachments.length > 0 ? currentAttachments : undefined,
+        controller.signal,
       );
+
       setContextTurns(res.context_turns ?? 0);
       if (res.max_context_turns) setMaxContextTurns(res.max_context_turns);
 
@@ -812,23 +854,24 @@ function App() {
       }).catch(() => {});
       apiUpdateChat(chatId, { session_id: res.session_id }).catch(() => {});
     } catch (err) {
-      const errorMsg: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: 'agent',
-        content: `Connection error: ${err instanceof Error ? err.message : 'Unknown error'}. Make sure the API server is running.`,
-        timestamp: Date.now() / 1000,
-      };
-      setChats((prev) =>
-        prev.map((c) =>
-          c.id === chatId
-            ? { ...c, messages: [...c.messages, errorMsg] }
-            : c
-        )
-      );
+      const isAbort = err instanceof Error && err.name === 'AbortError';
+      if (!isAbort) {
+        const errorMsg: ChatMessage = {
+          id: crypto.randomUUID(),
+          role: 'agent',
+          content: `Connection error: ${err instanceof Error ? err.message : 'Unknown error'}. Make sure the API server is running.`,
+          timestamp: Date.now() / 1000,
+        };
+        setChats((prev) =>
+          prev.map((c) =>
+            c.id === chatId ? { ...c, messages: [...c.messages, errorMsg] } : c
+          )
+        );
+      }
     } finally {
-      setLoading(false);
+      clearLoading();
     }
-  }, [input, loading, activeChatId, chats, attachments]);
+  }, [input, loadingChats, activeChatId, chats, attachments]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -1066,6 +1109,9 @@ function App() {
                         <span />
                         <span />
                       </div>
+                      {activeChatId && streamingStatus[activeChatId] && (
+                        <div className="streaming-status">{streamingStatus[activeChatId]}</div>
+                      )}
                     </div>
                   )}
                   <div ref={messagesEndRef} />
@@ -1150,14 +1196,24 @@ function App() {
                   rows={1}
                   disabled={loading}
                 />
-                <button
-                  className="chat-send-btn"
-                  onClick={() => handleSend()}
-                  disabled={(!input.trim() && attachments.length === 0) || loading}
-                  title="Send message"
-                >
-                  &#x27A4;
-                </button>
+                {loading ? (
+                  <button
+                    className="chat-cancel-btn"
+                    onClick={handleCancel}
+                    title="Stop generation"
+                  >
+                    &#x25A0;
+                  </button>
+                ) : (
+                  <button
+                    className="chat-send-btn"
+                    onClick={() => handleSend()}
+                    disabled={(!input.trim() && attachments.length === 0)}
+                    title="Send message"
+                  >
+                    &#x27A4;
+                  </button>
+                )}
               </div>
             </div>
           </div>

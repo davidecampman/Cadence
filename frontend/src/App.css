@@ -721,6 +721,18 @@ body.light-mode .attachment-download-btn:hover {
   50% { opacity: 1; transform: scale(1); }
 }
 
+.streaming-status {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+  opacity: 0.8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 600px;
+}
+
 /* ═══════════════════════════════════════════════
    INPUT AREA — glass bottom bar
    ═══════════════════════════════════════════════ */
@@ -845,6 +857,29 @@ body.light-mode .chat-send-btn {
 .chat-send-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.chat-cancel-btn {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  color: #ef4444;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.chat-cancel-btn:hover {
+  background: rgba(239, 68, 68, 0.3);
+  box-shadow: 0 4px 16px rgba(239, 68, 68, 0.25);
 }
 
 /* ═══════════════════════════════════════════════

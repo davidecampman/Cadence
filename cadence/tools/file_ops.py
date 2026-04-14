@@ -1,9 +1,10 @@
-"""File operation tools — read, write, list, search."""
+"""File operation tools — read, write, list, search, grep, edit."""
 
 from __future__ import annotations
 
 import glob as glob_mod
 import os
+import re
 from pathlib import Path
 
 from cadence.core.types import PermissionTier
@@ -146,3 +147,139 @@ class SearchFilesTool(Tool):
                         return "\n".join(results)
 
         return "\n".join(results) or f"No matches for '{pattern}'"
+
+
+class GrepTool(Tool):
+    name = "grep"
+    description = (
+        "Search file contents using a regular expression. Returns matching lines "
+        "with file path and line number. Supports recursive directory search, "
+        "context lines, and file-type filtering."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "pattern": {"type": "string", "description": "Regular expression to search for."},
+            "path": {"type": "string", "description": "File or directory to search.", "default": "."},
+            "glob": {
+                "type": "string",
+                "description": "File glob filter (e.g., '*.py', '**/*.ts'). Default searches all files.",
+                "default": "**/*",
+            },
+            "context_lines": {
+                "type": "integer",
+                "description": "Lines of context to show before and after each match.",
+                "default": 0,
+            },
+            "ignore_case": {"type": "boolean", "description": "Case-insensitive search.", "default": False},
+            "max_matches": {"type": "integer", "description": "Maximum number of matches to return.", "default": 100},
+        },
+        "required": ["pattern"],
+    }
+    permission_tier = PermissionTier.READ_ONLY
+
+    async def execute(
+        self,
+        pattern: str,
+        path: str = ".",
+        glob: str = "**/*",
+        context_lines: int = 0,
+        ignore_case: bool = False,
+        max_matches: int = 100,
+    ) -> str:
+        flags = re.IGNORECASE if ignore_case else 0
+        try:
+            rx = re.compile(pattern, flags)
+        except re.error as e:
+            return f"Invalid regex pattern: {e}"
+
+        base = Path(path).expanduser()
+        if base.is_file():
+            files = [base]
+        else:
+            files = sorted(base.rglob(glob.lstrip("**/") if glob == "**/*" else glob))[:1000]
+
+        results: list[str] = []
+        total = 0
+
+        for fp in files:
+            if not fp.is_file():
+                continue
+            try:
+                lines = fp.read_text(errors="replace").splitlines()
+            except Exception:
+                continue
+
+            for i, line in enumerate(lines):
+                if not rx.search(line):
+                    continue
+
+                if context_lines:
+                    start = max(0, i - context_lines)
+                    end = min(len(lines), i + context_lines + 1)
+                    for j in range(start, end):
+                        marker = ">" if j == i else " "
+                        results.append(f"{fp}:{j + 1}{marker} {lines[j]}")
+                    results.append("--")
+                else:
+                    results.append(f"{fp}:{i + 1}: {line.rstrip()}")
+
+                total += 1
+                if total >= max_matches:
+                    results.append(f"... (truncated — {max_matches} matches shown)")
+                    return "\n".join(results)
+
+        return "\n".join(results) or f"No matches for '{pattern}'"
+
+
+class EditFileTool(Tool):
+    name = "edit_file"
+    description = (
+        "Make a precise string replacement in a file. Replaces old_string with new_string. "
+        "old_string must appear exactly once in the file (or use replace_all=true). "
+        "Prefer this over write_file for targeted edits — it is safer and more efficient."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Path of the file to edit."},
+            "old_string": {"type": "string", "description": "Exact text to find and replace."},
+            "new_string": {"type": "string", "description": "Text to replace it with."},
+            "replace_all": {
+                "type": "boolean",
+                "description": "Replace every occurrence instead of requiring uniqueness.",
+                "default": False,
+            },
+        },
+        "required": ["path", "old_string", "new_string"],
+    }
+    permission_tier = PermissionTier.STANDARD
+
+    async def execute(
+        self, path: str, old_string: str, new_string: str, replace_all: bool = False
+    ) -> str:
+        p = Path(path).expanduser()
+        if not p.exists():
+            return f"File not found: {path}"
+        if not p.is_file():
+            return f"Not a file: {path}"
+        if not _is_write_safe(p):
+            return f"Write blocked: path resolves inside a protected system directory ({p.resolve()})"
+
+        content = p.read_text(encoding="utf-8", errors="replace")
+
+        if old_string not in content:
+            return f"old_string not found in {path}"
+
+        count = content.count(old_string)
+        if not replace_all and count > 1:
+            return (
+                f"old_string appears {count} times in {path} — it must be unique. "
+                "Add more surrounding context to make it unique, or use replace_all=true."
+            )
+
+        new_content = content.replace(old_string, new_string) if replace_all else content.replace(old_string, new_string, 1)
+        n = count if replace_all else 1
+
+        p.write_text(new_content, encoding="utf-8")
+        return f"Replaced {n} occurrence(s) in {path}"
