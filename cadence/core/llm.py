@@ -465,8 +465,7 @@ async def _codex_oauth_completion(
         "max_output_tokens": max_tokens,
         "store": False,
     }
-    if instructions:
-        payload["instructions"] = instructions
+    payload["instructions"] = instructions or "You are a helpful assistant."
     if tools:
         payload["tools"] = _tools_to_responses_api(tools)
 
