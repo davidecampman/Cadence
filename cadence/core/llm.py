@@ -629,10 +629,19 @@ async def _chatgpt_conversation_completion(
     from cadence.core.chatgpt_oauth import get_chatgpt_account_id
     chatgpt_acct = get_chatgpt_account_id()
 
+    # The backend-api/conversation endpoint has Cloudflare bot protection.
+    # We need browser-like headers to get past it — matching what the
+    # ChatGPT desktop/web client sends.
+    device_id = str(uuid.uuid4())
     headers = {
         "Authorization": f"Bearer {oauth_token}",
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+        "oai-device-id": device_id,
+        "oai-language": "en-US",
+        "Referer": "https://chatgpt.com/",
+        "Origin": "https://chatgpt.com",
     }
     if chatgpt_acct:
         headers["ChatGPT-Account-Id"] = chatgpt_acct
