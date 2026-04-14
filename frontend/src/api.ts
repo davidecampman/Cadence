@@ -55,6 +55,113 @@ export async function sendMessage(
   return res.json();
 }
 
+export type StreamEventHandler = {
+  onThinking?: (content: string, agentId: string) => void;
+  onStatus?: (status: string, agentId: string) => void;
+  onDone?: (response: ChatResponse) => void;
+  onError?: (error: string) => void;
+};
+
+/**
+ * Stream a chat message via SSE. Calls handler callbacks as events arrive.
+ * Resolves with the ChatResponse when done, or rejects on error/abort.
+ */
+export async function sendMessageStream(
+  message: string,
+  handlers: StreamEventHandler,
+  sessionId?: string,
+  images?: ImageAttachment[],
+  signal?: AbortSignal,
+): Promise<ChatResponse> {
+  const body: Record<string, unknown> = { message, session_id: sessionId };
+  if (images && images.length > 0) {
+    body.images = images.map(({ data, media_type }) => ({ data, media_type }));
+  }
+
+  const res = await fetch(`${API_BASE}/chat/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  });
+
+  if (!res.ok) throw new Error(`Chat stream request failed: ${res.status}`);
+  if (!res.body) throw new Error('No response body for streaming');
+
+  return new Promise<ChatResponse>((resolve, reject) => {
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    const pump = async () => {
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split('\n\n');
+          buffer = parts.pop() ?? '';
+
+          for (const part of parts) {
+            if (!part.trim()) continue;
+            // Parse SSE: extract event type and data
+            const lines = part.split('\n');
+            let eventType = 'message';
+            let dataStr = '';
+            for (const line of lines) {
+              if (line.startsWith('event: ')) eventType = line.slice(7).trim();
+              else if (line.startsWith('data: ')) dataStr = line.slice(6).trim();
+            }
+            if (!dataStr) continue;
+
+            let data: Record<string, unknown>;
+            try { data = JSON.parse(dataStr); } catch { continue; }
+
+            if (eventType === 'thinking') {
+              handlers.onThinking?.(data.content as string ?? '', data.agent_id as string ?? '');
+            } else if (eventType === 'status') {
+              handlers.onStatus?.(data.status as string ?? '', data.agent_id as string ?? '');
+            } else if (eventType === 'done') {
+              const chatResponse: ChatResponse = {
+                response: data.response as string ?? '',
+                session_id: data.session_id as string ?? '',
+                trace_steps: [],
+                duration_ms: data.duration_ms as number ?? 0,
+                context_turns: 0,
+                max_context_turns: 50,
+              };
+              handlers.onDone?.(chatResponse);
+              resolve(chatResponse);
+              return;
+            } else if (eventType === 'error') {
+              const err = data.error as string ?? 'Unknown streaming error';
+              handlers.onError?.(err);
+              reject(new Error(err));
+              return;
+            }
+          }
+        }
+        reject(new Error('Stream ended without done event'));
+      } catch (e) {
+        if ((e as Error).name === 'AbortError') {
+          reject(e);
+        } else {
+          reject(e);
+        }
+      }
+    };
+
+    pump();
+  });
+}
+
+export async function cancelChat(sessionId: string): Promise<void> {
+  await fetch(`${API_BASE}/chat/cancel/${encodeURIComponent(sessionId)}`, {
+    method: 'POST',
+  });
+}
+
 export interface BedrockConfig {
   enabled: boolean;
   region: string;

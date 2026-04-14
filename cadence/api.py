@@ -86,6 +86,9 @@ async def no_cache_api_responses(request: Request, call_next):
 _agent_app: CadenceApp | None = None
 _chat_store: ChatStore | None = None
 
+# Maps session_id → running asyncio.Task so they can be cancelled
+_running_tasks: dict[str, asyncio.Task] = {}
+
 
 def get_app() -> CadenceApp:
     global _agent_app
@@ -1129,11 +1132,14 @@ async def kb_stats():
 async def chat_stream(req: ChatRequest):
     """Server-Sent Events streaming endpoint for chat.
 
-    Streams thinking steps, tool calls, and tokens in real-time,
+    Streams thinking steps, tool calls, and status in real-time,
     finishing with a 'done' event containing the full response.
+    The running task is registered in _running_tasks so it can be cancelled
+    via POST /api/chat/cancel/{session_id}.
     """
     agent_app = get_app()
     store = get_chat_store()
+    conv_config = agent_app.config.conversation
     session_id = req.session_id or str(uuid.uuid4())[:8]
     history = list(store.get_session_history(session_id))
 
@@ -1144,23 +1150,40 @@ async def chat_stream(req: ChatRequest):
         try:
             response = await agent_app.run(req.message, conversation_history=history, images=req.images)
             duration_ms = (time.time() - start) * 1000
-            # Persist exchange
+
+            # Persist exchange (with same compression/cap logic as the non-streaming endpoint)
             new_history = list(history)
             new_history.append({"role": "user", "content": req.message})
             new_history.append({"role": "assistant", "content": response})
-            store.save_session_history(session_id, new_history)
+
+            turn_count = len(new_history) // 2
+            if conv_config.compression_enabled and turn_count > conv_config.compression_threshold:
+                new_history = await _compress_history(agent_app, session_id, new_history)
+            max_entries = conv_config.max_history_turns * 2
+            if len(new_history) > max_entries:
+                new_history = new_history[-max_entries:]
+
+            store.save_session_history(
+                session_id, new_history,
+                summary=store.get_session_summary(session_id),
+            )
             await collector.emit_done(
                 full_response=response,
                 session_id=session_id,
                 duration_ms=duration_ms,
             )
+        except asyncio.CancelledError:
+            await collector.emit_error("Request cancelled by user.")
         except Exception as e:
             await collector.emit_error(str(e))
+        finally:
+            _running_tasks.pop(session_id, None)
 
-    # Run agent in background, stream events to client
-    asyncio.create_task(_run_and_collect())
+    # Run agent in background; register task for cancellation
+    task = asyncio.create_task(_run_and_collect())
+    _running_tasks[session_id] = task
 
-    # Patch the trace logger to emit thinking events to the collector
+    # Patch the trace logger to emit thinking/status events in real-time
     original_log = agent_app.trace.log
 
     def _streaming_log(step):
@@ -1192,6 +1215,17 @@ async def chat_stream(req: ChatRequest):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.post("/api/chat/cancel/{session_id}")
+async def cancel_chat(session_id: str):
+    """Cancel a running chat request by session ID."""
+    task = _running_tasks.get(session_id)
+    if task and not task.done():
+        task.cancel()
+        _running_tasks.pop(session_id, None)
+        return {"status": "cancelled", "session_id": session_id}
+    return {"status": "not_found", "session_id": session_id}
 
 
 # --- Checkpoint (human-in-the-loop) endpoints ---

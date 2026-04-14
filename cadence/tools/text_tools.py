@@ -140,19 +140,64 @@ class DiffPatchTool(Tool):
 
 
 def _apply_patch(original_lines: list[str], patch_text: str) -> list[str] | None:
-    """Minimal unified diff applier."""
+    """Apply a unified diff patch to a list of lines.
+
+    Parses each @@ hunk and applies removals/additions in order,
+    tracking a cumulative line offset so later hunks land correctly.
+    """
     result = list(original_lines)
-    offset = 0
+    patch_lines = patch_text.splitlines(keepends=True)
+    offset = 0  # cumulative shift from previously applied hunks
+    i = 0
 
-    for line in patch_text.splitlines():
-        if line.startswith("@@"):
-            # Parse hunk header: @@ -start,count +start,count @@
-            match = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
-            if match:
-                offset = int(match.group(1)) - 1
+    while i < len(patch_lines):
+        line = patch_lines[i]
 
-    # Simplified: just return original if we can't parse
-    # Full patch application would need more logic
+        # Skip file headers (--- / +++ / diff ...)
+        if line.startswith(("--- ", "+++ ", "diff ")):
+            i += 1
+            continue
+
+        if not line.startswith("@@"):
+            i += 1
+            continue
+
+        m = re.match(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", line)
+        if not m:
+            i += 1
+            continue
+
+        orig_start = int(m.group(1)) - 1  # convert to 0-based index
+        i += 1
+
+        # Gather the operations for this hunk
+        to_remove: list[str] = []
+        to_add: list[str] = []
+
+        while i < len(patch_lines):
+            l = patch_lines[i]
+            if l.startswith("@@") or l.startswith("diff "):
+                break
+            if l.startswith("-"):
+                to_remove.append(l[1:])
+                i += 1
+            elif l.startswith("+"):
+                to_add.append(l[1:])
+                i += 1
+            else:
+                # Context line — present in both old and new
+                ctx = l[1:] if l.startswith(" ") else l
+                to_remove.append(ctx)
+                to_add.append(ctx)
+                i += 1
+
+        pos = orig_start + offset
+        if pos < 0 or pos > len(result):
+            return None  # hunk position out of range
+
+        result[pos: pos + len(to_remove)] = to_add
+        offset += len(to_add) - len(to_remove)
+
     return result
 
 

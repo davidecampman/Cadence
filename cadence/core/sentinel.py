@@ -17,6 +17,7 @@ chat2api, Webscout).
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -279,7 +280,11 @@ async def get_sentinel_headers(
         seed = pow_data.get("seed", "")
         difficulty = pow_data.get("difficulty", "")
         if seed and difficulty:
-            proof = generate_proof_token(seed, difficulty, user_agent=ua)
+            # Run CPU-bound PoW solver in a thread pool so the event loop stays free
+            loop = asyncio.get_event_loop()
+            proof = await loop.run_in_executor(
+                None, generate_proof_token, seed, difficulty, ua
+            )
             result["openai-sentinel-proof-token"] = proof
             print(f"[Cadence] Sentinel PoW solved (difficulty={difficulty[:8]}...)")
         else:
