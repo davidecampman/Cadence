@@ -413,6 +413,26 @@ def get_chatgpt_account_id() -> str:
     return ""
 
 
+def get_persistent_device_id() -> str:
+    """Return a persistent oai-device-id, creating one if needed.
+
+    The ChatGPT backend expects the same device ID across requests.
+    We store it in the OAuth credential file so it survives restarts.
+    """
+    import uuid as _uuid
+
+    store = _load_oauth_store()
+    device_id = store.get("device_id", "")
+    if device_id:
+        return device_id
+
+    device_id = str(_uuid.uuid4())
+    store["device_id"] = device_id
+    _save_oauth_store(store)
+    logger.info("Generated persistent oai-device-id: %s", device_id)
+    return device_id
+
+
 # ---------------------------------------------------------------------------
 # Temporary OAuth callback server on port 1455
 # ---------------------------------------------------------------------------
