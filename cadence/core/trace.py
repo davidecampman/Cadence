@@ -26,7 +26,7 @@ class TraceLogger:
         self._steps.append(step)
 
         if self._file_path:
-            with open(self._file_path, "a") as f:
+            with open(self._file_path, "a", encoding="utf-8") as f:
                 f.write(step.model_dump_json() + "\n")
 
         if self._console:
