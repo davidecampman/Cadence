@@ -70,7 +70,7 @@ CODEX_API_BASE_URL = "https://chatgpt.com/backend-api"
 CODEX_RESPONSES_PATH = "/codex/responses"
 
 # Default Codex model available via subscription OAuth
-CODEX_DEFAULT_MODEL = "gpt-5.3-codex"
+CODEX_DEFAULT_MODEL = "gpt-5.4"
 
 
 # ---------------------------------------------------------------------------
