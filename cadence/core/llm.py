@@ -637,6 +637,11 @@ async def _chatgpt_conversation_completion(
     if chatgpt_acct:
         headers["ChatGPT-Account-Id"] = chatgpt_acct
 
+    logger.info(
+        "ChatGPT conversation: model=%s, account_id=%s, messages=%d",
+        model, chatgpt_acct or "(none)", len(conv_messages),
+    )
+
     # Stream the SSE response and collect the final message
     final_text = ""
     final_message_id = ""
@@ -646,16 +651,15 @@ async def _chatgpt_conversation_completion(
             async with client.stream(
                 "POST", url, json=payload, headers=headers,
             ) as resp:
-                if resp.status_code == 429:
-                    logger.warning("ChatGPT conversation quota exhausted (429).")
-                    raise ChatGPTConversationError("ChatGPT conversation quota exhausted.")
-                if resp.status_code in (401, 403):
-                    raise ChatGPTConversationError(
-                        f"ChatGPT conversation auth error ({resp.status_code})."
-                    )
                 if resp.status_code >= 400:
+                    body = await resp.aread()
+                    body_text = body.decode("utf-8", errors="replace")[:500]
+                    logger.warning(
+                        "ChatGPT conversation endpoint returned %d: %s",
+                        resp.status_code, body_text,
+                    )
                     raise ChatGPTConversationError(
-                        f"ChatGPT conversation error ({resp.status_code})."
+                        f"ChatGPT conversation error ({resp.status_code}): {body_text}"
                     )
 
                 async for line in resp.aiter_lines():
