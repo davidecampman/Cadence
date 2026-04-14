@@ -4,6 +4,7 @@ Supports two provider paths:
 - **OpenRouter / OpenAI-compatible**: via the ``openai`` SDK
 - **AWS Bedrock**: via the ``anthropic`` SDK with Bedrock transport
 - **Anthropic direct**: via the ``anthropic`` SDK
+- **ChatGPT OAuth**: via the ``openai`` SDK with OAuth access tokens
 """
 
 from __future__ import annotations
@@ -345,6 +346,23 @@ def _get_provider(model: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# ChatGPT OAuth token helper
+# ---------------------------------------------------------------------------
+
+async def _get_chatgpt_oauth_token() -> str | None:
+    """Return a valid ChatGPT OAuth access token if configured, else None.
+
+    Handles automatic token refresh when the stored token is expired.
+    """
+    try:
+        from cadence.core.chatgpt_oauth import get_access_token
+        return await get_access_token()
+    except Exception as e:
+        logger.debug("ChatGPT OAuth token retrieval failed: %s", e)
+        return None
+
+
+# ---------------------------------------------------------------------------
 # OpenAI-compatible completion (OpenRouter, OpenAI, etc.)
 # ---------------------------------------------------------------------------
 
@@ -368,10 +386,16 @@ async def _openai_completion(
         api_key = os.environ.get("OPENROUTER_API_KEY", "")
         api_model = model[len("openrouter/"):]
     else:
-        # Default: direct OpenAI
+        # Default: direct OpenAI — try ChatGPT OAuth first, fall back to API key
         base_url = None  # uses sdk default
         api_key = os.environ.get("OPENAI_API_KEY", "")
         api_model = model
+
+        # If ChatGPT OAuth is configured, prefer the OAuth access token
+        oauth_token = await _get_chatgpt_oauth_token()
+        if oauth_token:
+            api_key = oauth_token
+            logger.debug("Using ChatGPT OAuth token for model %s", model)
 
     client = openai.AsyncOpenAI(base_url=base_url, api_key=api_key)
 

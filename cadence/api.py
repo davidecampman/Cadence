@@ -34,6 +34,14 @@ from cadence.core.keystore import (
     PROVIDER_ENV_VARS,
     BEDROCK_KEYS,
 )
+from cadence.core.chatgpt_oauth import (
+    build_authorize_url,
+    exchange_code,
+    get_oauth_status,
+    revoke_oauth,
+    DEFAULT_CALLBACK_PORT,
+    DEFAULT_CALLBACK_URL,
+)
 from cadence.core.types import TraceStep
 from cadence.storage.chat_store import ChatStore, ChatMessageRecord
 
@@ -605,6 +613,67 @@ async def remove_key(provider: str):
         if env_var:
             os.environ.pop(env_var, None)
     return {"status": "deleted" if deleted else "not_found", "provider": provider}
+
+
+# --- ChatGPT OAuth endpoints ---
+
+class OAuthInitRequest(BaseModel):
+    callback_url: str | None = None
+
+
+class OAuthCallbackRequest(BaseModel):
+    code: str
+    state: str
+    callback_url: str | None = None
+
+
+@app.post("/api/oauth/chatgpt/initiate")
+async def oauth_chatgpt_initiate(req: OAuthInitRequest | None = None):
+    """Start the ChatGPT OAuth PKCE flow.
+
+    Returns the authorization URL the user should open in their browser.
+    """
+    callback = (req.callback_url if req and req.callback_url else None) or DEFAULT_CALLBACK_URL
+    auth_url = build_authorize_url(callback_url=callback)
+    return {
+        "authorize_url": auth_url,
+        "callback_url": callback,
+        "callback_port": DEFAULT_CALLBACK_PORT,
+    }
+
+
+@app.post("/api/oauth/chatgpt/callback")
+async def oauth_chatgpt_callback(req: OAuthCallbackRequest):
+    """Complete the OAuth flow by exchanging the authorization code for tokens.
+
+    The frontend captures the code from the callback redirect and sends it here.
+    """
+    callback = req.callback_url or DEFAULT_CALLBACK_URL
+    try:
+        result = await exchange_code(
+            code=req.code,
+            state=req.state,
+            callback_url=callback,
+        )
+        return result
+    except ValueError as e:
+        return {"error": str(e), "status": "failed"}
+    except Exception as e:
+        logger.error("ChatGPT OAuth callback failed: %s", e)
+        return {"error": f"Token exchange failed: {e}", "status": "failed"}
+
+
+@app.get("/api/oauth/chatgpt/status")
+async def oauth_chatgpt_status():
+    """Check the current ChatGPT OAuth authorization status."""
+    return get_oauth_status()
+
+
+@app.post("/api/oauth/chatgpt/revoke")
+async def oauth_chatgpt_revoke():
+    """Revoke ChatGPT OAuth credentials."""
+    revoked = revoke_oauth()
+    return {"status": "revoked" if revoked else "not_found"}
 
 
 # --- OpenRouter dynamic model discovery ---

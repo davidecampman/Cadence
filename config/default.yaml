@@ -26,6 +26,14 @@ models:
     # secret_access_key: "..."    # Optional: explicit AWS secret access key
     # api_key: "..."              # Optional: long-term Bedrock API key (alternative to IAM)
 
+  # ChatGPT OAuth configuration
+  # Authenticate with your ChatGPT Plus/Pro subscription to use OpenAI models
+  # at your subscription's flat rate — no per-token API billing.
+  # Run the OAuth flow from the Config > Providers page in the UI.
+  chatgpt_oauth:
+    enabled: false
+    # callback_port: 18756  # Local port for OAuth callback (rarely needs changing)
+
   # Local model configuration (Ollama, LM Studio, vLLM, llama.cpp, etc.)
   # To use local models, set enabled: true and prefix model names with "local/".
   # e.g., strong: "local/llama3.1:70b"  fast: "local/llama3.1:8b"
