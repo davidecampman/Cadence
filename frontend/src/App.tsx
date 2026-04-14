@@ -2,7 +2,6 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import {
   sendMessageStream,
-  cancelChat,
   fetchConfig,
   updateConfig,
   fetchTools,
@@ -30,7 +29,6 @@ import {
   revokeOAuth,
   fetchDag,
   type AppConfig,
-  type ChatResponse,
   type TraceStep,
   type ToolInfo,
   type SkillInfo,
