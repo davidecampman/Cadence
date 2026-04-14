@@ -51,9 +51,10 @@ DEFAULT_SCOPES = "openid profile email offline_access"
 # Where we persist encrypted OAuth credentials
 _OAUTH_PATH = _DATA_DIR / "chatgpt_oauth.enc"
 
-# Default local callback port (same as the Cadence API server)
-DEFAULT_CALLBACK_PORT = 5173
-DEFAULT_CALLBACK_URL = "http://127.0.0.1:5173/oauth/callback"
+# Default local callback matching the Codex CLI's registered redirect pattern.
+# OpenAI whitelists "http://localhost:{port}/auth/callback" for this client ID.
+DEFAULT_CALLBACK_PORT = 8000
+DEFAULT_CALLBACK_URL = "http://localhost:8000/auth/callback"
 
 # ---------------------------------------------------------------------------
 # Codex API endpoint (different from the regular OpenAI API)
@@ -155,15 +156,15 @@ def build_authorize_url(
     _pending_flow.state = state
 
     params = {
-        "response_type": "code",
         "client_id": OPENAI_CLIENT_ID,
         "redirect_uri": callback_url,
         "scope": scopes,
-        "state": state,
         "code_challenge": challenge,
         "code_challenge_method": "S256",
-        "id_token_add_organizations": "true",
+        "response_type": "code",
+        "state": state,
         "codex_cli_simplified_flow": "true",
+        "originator": "cadence",
     }
     qs = "&".join(f"{k}={_url_encode(v)}" for k, v in params.items())
     return f"{OPENAI_AUTH_URL}?{qs}"

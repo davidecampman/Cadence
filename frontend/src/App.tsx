@@ -336,7 +336,7 @@ function App() {
     const params = new URLSearchParams(window.location.search);
     const code = params.get('code');
     const state = params.get('state');
-    if (code && state && window.location.pathname === '/oauth/callback') {
+    if (code && state && (window.location.pathname === '/auth/callback' || window.location.pathname === '/oauth/callback')) {
       // Clear the URL params so we don't re-process on refresh
       window.history.replaceState({}, '', '/');
       setView('config');
