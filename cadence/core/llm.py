@@ -976,7 +976,7 @@ async def chat_completion(
                     model, messages, tools, temperature, max_tokens,
                     oauth_token=oauth_token,
                 )
-                logger.debug("Request served via ChatGPT conversation endpoint.")
+                logger.info("Request served via ChatGPT conversation endpoint (tier 1).")
                 return result
             except ChatGPTConversationError as e:
                 logger.info(
@@ -989,7 +989,7 @@ async def chat_completion(
                     model, messages, tools, temperature, max_tokens,
                     oauth_token=oauth_token,
                 )
-                logger.debug("Request served via Codex OAuth endpoint.")
+                logger.info("Request served via Codex OAuth endpoint (tier 2).")
                 return result
             except CodexQuotaExhaustedError:
                 logger.info(
@@ -1006,7 +1006,7 @@ async def chat_completion(
                     "wait for your quota to reset or add an OpenAI API key in "
                     "Config > Providers."
                 )
-            logger.info("Falling back to OpenAI API key for model %s.", model)
+            logger.info("Falling back to OpenAI API key for model %s (tier 3).", model)
 
     return await _openai_completion(
         model, messages, tools, temperature, max_tokens,
