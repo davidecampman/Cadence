@@ -80,25 +80,39 @@ function chatTitle(messages: ChatMessage[]): string {
   return text.length > 40 ? text.slice(0, 40) + '...' : text;
 }
 
+/** Strip LLM citation artifacts (e.g. 【cite】turn0view0【】) that leak into responses. */
+function cleanCitations(text: string): string {
+  // Remove 【…】 bracketed citation markers from web-search-augmented LLMs
+  text = text.replace(/\u3010[^\u3011]*\u3011/g, '');
+  // Remove orphaned turn-reference tokens (turn0view0, turn0search3, etc.)
+  text = text.replace(/\bturn\d+\w*\d*\b/gi, '');
+  // Collapse runs of whitespace left behind
+  text = text.replace(/ {2,}/g, ' ');
+  return text;
+}
+
 /** Render message content, replacing [[FILE:/path]] markers with download/reveal buttons. */
 function renderMessageContent(content: string, role: string = 'user') {
+  // Clean citation artifacts from agent responses before rendering
+  const cleaned = role === 'agent' ? cleanCitations(content) : content;
+
   const FILE_RE = /\[\[FILE:(.*?)\]\]/g;
   const parts: (string | { path: string })[] = [];
   let last = 0;
   let m: RegExpExecArray | null;
-  while ((m = FILE_RE.exec(content)) !== null) {
-    if (m.index > last) parts.push(content.slice(last, m.index));
+  while ((m = FILE_RE.exec(cleaned)) !== null) {
+    if (m.index > last) parts.push(cleaned.slice(last, m.index));
     parts.push({ path: m[1] });
     last = m.index + m[0].length;
   }
-  if (last < content.length) parts.push(content.slice(last));
+  if (last < cleaned.length) parts.push(cleaned.slice(last));
 
   // If no file markers found, render based on role
   if (parts.length === 1 && typeof parts[0] === 'string') {
     if (role === 'agent') {
-      return <ReactMarkdown>{content}</ReactMarkdown>;
+      return <ReactMarkdown>{cleaned}</ReactMarkdown>;
     }
-    return <>{content}</>;
+    return <>{cleaned}</>;
   }
 
   return (
