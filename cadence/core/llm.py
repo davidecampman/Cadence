@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import re
 from typing import Any
 
@@ -581,20 +582,34 @@ async def _chatgpt_conversation_completion(
 ) -> tuple[str, list[ToolCall], dict[str, Any]]:
     """Call the ChatGPT conversation endpoint (same as the web/desktop client).
 
-    Uses ``https://chatgpt.com/backend-api/conversation`` — the same endpoint
-    that powers the ChatGPT UI.  This has a **separate quota pool** from Codex,
-    so it can still work when the Codex quota is exhausted.
+    Uses ``https://chatgpt.com/backend-api/f/conversation`` — the same
+    endpoint that powers the ChatGPT UI.  This has a **separate quota pool**
+    from Codex, so it can still work when the Codex quota is exhausted.
 
-    The request format uses ``action``, ``messages`` with ``parts``, and
-    ``parent_message_id``.  The response is an EventStream (SSE).
+    The flow:
+    1. Fetch a persistent ``oai-device-id`` (stored across restarts).
+    2. Call the Sentinel chat-requirements preflight to get a requirements
+       token and proof-of-work seed/difficulty.
+    3. Solve the proof-of-work (SHA3-512 hashcash).
+    4. Send the conversation request with all Sentinel headers.
 
     Raises ``ChatGPTConversationError`` on non-quota failures so the caller
     can fall back further.
     """
     import uuid
-    from cadence.core.chatgpt_oauth import CODEX_API_BASE_URL
+    from cadence.core.chatgpt_oauth import get_chatgpt_account_id, get_persistent_device_id
+    from cadence.core.sentinel import (
+        CONVERSATION_URL,
+        OAI_CLIENT_VERSION,
+        OAI_CLIENT_BUILD_NUMBER,
+        get_sentinel_headers,
+        _USER_AGENT,
+    )
 
-    url = f"{CODEX_API_BASE_URL}/conversation"
+    # Persistent device ID (same across requests/restarts)
+    device_id = get_persistent_device_id()
+    chatgpt_acct = get_chatgpt_account_id()
+    session_id = str(uuid.uuid4())
 
     # Build messages in the ChatGPT backend-api format
     system_message = ""
@@ -612,7 +627,9 @@ async def _chatgpt_conversation_completion(
                 "id": msg_id,
                 "author": {"role": "user"},
                 "content": {"content_type": "text", "parts": [msg.content]},
-                "metadata": {},
+                "metadata": {
+                    "serialization_metadata": {"custom_symbol_offsets": []},
+                },
             })
         elif msg.role == Role.ASSISTANT:
             conv_messages.append({
@@ -622,9 +639,6 @@ async def _chatgpt_conversation_completion(
                 "metadata": {},
             })
 
-    # Use the last message only (ChatGPT conversation API expects
-    # the new user message; prior context is in conversation_id/parent)
-    # For a stateless call, we send all messages as new input.
     parent_id = str(uuid.uuid4())
 
     payload: dict[str, Any] = {
@@ -633,16 +647,30 @@ async def _chatgpt_conversation_completion(
             "id": str(uuid.uuid4()),
             "author": {"role": "user"},
             "content": {"content_type": "text", "parts": [""]},
-            "metadata": {},
+            "metadata": {
+                "serialization_metadata": {"custom_symbol_offsets": []},
+            },
         }],
         "model": model,
         "parent_message_id": parent_id,
-        "timezone_offset_min": 0,
+        "timezone_offset_min": 240,
         "history_and_training_disabled": True,
         "conversation_mode": {"kind": "primary_assistant"},
         "force_paragen": False,
         "force_paragen_model_slug": "",
         "force_rate_limit": False,
+        "suggestions": [],
+        "supports_buffering": True,
+        "supported_encodings": ["sse"],
+        "client_contextual_info": {
+            "is_dark_mode": False,
+            "time_since_loaded": random.randint(50, 500),
+            "page_height": random.randint(600, 900),
+            "page_width": random.randint(1200, 1920),
+            "pixel_ratio": 1,
+            "screen_height": random.randint(900, 1440),
+            "screen_width": random.randint(1440, 2560),
+        },
     }
 
     # Inject system message if present
@@ -655,34 +683,38 @@ async def _chatgpt_conversation_completion(
             "metadata": {},
         })
 
-    from cadence.core.chatgpt_oauth import get_chatgpt_account_id
-    chatgpt_acct = get_chatgpt_account_id()
+    print(
+        f"[Cadence] ChatGPT conversation: model={model}, "
+        f"account_id={chatgpt_acct or '(none)'}, messages={len(conv_messages)}"
+    )
 
-    # The backend-api/conversation endpoint has Cloudflare bot protection.
-    # We need browser-like headers to get past it — matching what the
-    # ChatGPT desktop/web client sends.
-    device_id = str(uuid.uuid4())
+    # --- Sentinel preflight: get requirements token + solve PoW ---
+    sentinel_headers = await get_sentinel_headers(
+        oauth_token, device_id, chatgpt_acct,
+    )
+
+    # Build the full request headers (matching real ChatGPT web client)
     headers = {
         "Authorization": f"Bearer {oauth_token}",
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": _USER_AGENT,
         "oai-device-id": device_id,
         "oai-language": "en-US",
+        "oai-client-version": OAI_CLIENT_VERSION,
+        "oai-client-build-number": OAI_CLIENT_BUILD_NUMBER,
+        "oai-session-id": session_id,
         "Referer": "https://chatgpt.com/",
         "Origin": "https://chatgpt.com",
     }
     if chatgpt_acct:
         headers["ChatGPT-Account-Id"] = chatgpt_acct
 
-    logger.info(
-        "ChatGPT conversation: model=%s, account_id=%s, messages=%d",
-        model, chatgpt_acct or "(none)", len(conv_messages),
-    )
+    # Merge in sentinel tokens (requirements token + proof-of-work)
+    headers.update(sentinel_headers)
 
-    # Use curl_cffi to impersonate a browser TLS fingerprint — the
-    # /backend-api/conversation endpoint is behind Cloudflare bot protection
-    # that blocks Python HTTP clients based on their TLS handshake.
+    # Use curl_cffi to impersonate a browser TLS fingerprint
     try:
         from curl_cffi.requests import AsyncSession as CurlAsyncSession
     except ImportError:
@@ -697,14 +729,14 @@ async def _chatgpt_conversation_completion(
     try:
         async with CurlAsyncSession(impersonate="chrome") as session:
             resp = await session.post(
-                url, json=payload, headers=headers, timeout=120,
+                CONVERSATION_URL, json=payload, headers=headers, timeout=120,
             )
 
             if resp.status_code >= 400:
                 body_text = resp.text[:500]
-                logger.warning(
-                    "ChatGPT conversation endpoint returned %d: %s",
-                    resp.status_code, body_text,
+                print(
+                    f"[Cadence] ChatGPT conversation endpoint returned "
+                    f"{resp.status_code}: {body_text}"
                 )
                 raise ChatGPTConversationError(
                     f"ChatGPT conversation error ({resp.status_code}): {body_text}"
