@@ -73,8 +73,8 @@ _FEATURE_DETECTS = [
 ]
 
 _GPU_STRINGS = [
-    "gpu\u2212[object GPU]",
-    "gpu\u2212[object GPU]",
+    "gpu-[object GPU]",
+    "gpu-[object GPU]",
 ]
 
 _USER_AGENT = (
