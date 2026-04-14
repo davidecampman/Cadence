@@ -529,6 +529,172 @@ async def _codex_oauth_completion(
     return text, tool_calls, usage
 
 
+class ChatGPTConversationError(Exception):
+    """Raised when the ChatGPT conversation endpoint fails."""
+
+
+async def _chatgpt_conversation_completion(
+    model: str,
+    messages: list[Message],
+    tools: list[ToolDefinition] | None,
+    temperature: float,
+    max_tokens: int,
+    oauth_token: str,
+) -> tuple[str, list[ToolCall], dict[str, Any]]:
+    """Call the ChatGPT conversation endpoint (same as the web/desktop client).
+
+    Uses ``https://chatgpt.com/backend-api/conversation`` — the same endpoint
+    that powers the ChatGPT UI.  This has a **separate quota pool** from Codex,
+    so it can still work when the Codex quota is exhausted.
+
+    The request format uses ``action``, ``messages`` with ``parts``, and
+    ``parent_message_id``.  The response is an EventStream (SSE).
+
+    Raises ``ChatGPTConversationError`` on non-quota failures so the caller
+    can fall back further.
+    """
+    import httpx
+    import uuid
+    from cadence.core.chatgpt_oauth import CODEX_API_BASE_URL
+
+    url = f"{CODEX_API_BASE_URL}/conversation"
+
+    # Build messages in the ChatGPT backend-api format
+    system_message = ""
+    conv_messages = []
+
+    for msg in messages:
+        if msg.role == Role.SYSTEM:
+            system_message = msg.content
+            continue
+
+        msg_id = str(uuid.uuid4())
+
+        if msg.role == Role.USER:
+            conv_messages.append({
+                "id": msg_id,
+                "author": {"role": "user"},
+                "content": {"content_type": "text", "parts": [msg.content]},
+                "metadata": {},
+            })
+        elif msg.role == Role.ASSISTANT:
+            conv_messages.append({
+                "id": msg_id,
+                "author": {"role": "assistant"},
+                "content": {"content_type": "text", "parts": [msg.content or ""]},
+                "metadata": {},
+            })
+
+    # Use the last message only (ChatGPT conversation API expects
+    # the new user message; prior context is in conversation_id/parent)
+    # For a stateless call, we send all messages as new input.
+    parent_id = str(uuid.uuid4())
+
+    payload: dict[str, Any] = {
+        "action": "next",
+        "messages": conv_messages if conv_messages else [{
+            "id": str(uuid.uuid4()),
+            "author": {"role": "user"},
+            "content": {"content_type": "text", "parts": [""]},
+            "metadata": {},
+        }],
+        "model": model,
+        "parent_message_id": parent_id,
+        "timezone_offset_min": 0,
+        "history_and_training_disabled": True,
+        "conversation_mode": {"kind": "primary_assistant"},
+        "force_paragen": False,
+        "force_paragen_model_slug": "",
+        "force_rate_limit": False,
+    }
+
+    # Inject system message if present
+    if system_message:
+        system_id = str(uuid.uuid4())
+        payload["messages"].insert(0, {
+            "id": system_id,
+            "author": {"role": "system"},
+            "content": {"content_type": "text", "parts": [system_message]},
+            "metadata": {},
+        })
+
+    headers = {
+        "Authorization": f"Bearer {oauth_token}",
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+    }
+
+    # Stream the SSE response and collect the final message
+    final_text = ""
+    final_message_id = ""
+
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            async with client.stream(
+                "POST", url, json=payload, headers=headers,
+            ) as resp:
+                if resp.status_code == 429:
+                    logger.warning("ChatGPT conversation quota exhausted (429).")
+                    raise ChatGPTConversationError("ChatGPT conversation quota exhausted.")
+                if resp.status_code in (401, 403):
+                    raise ChatGPTConversationError(
+                        f"ChatGPT conversation auth error ({resp.status_code})."
+                    )
+                if resp.status_code >= 400:
+                    raise ChatGPTConversationError(
+                        f"ChatGPT conversation error ({resp.status_code})."
+                    )
+
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data_str = line[6:]
+                    if data_str == "[DONE]":
+                        break
+
+                    try:
+                        data = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+
+                    msg_data = data.get("message")
+                    if not msg_data:
+                        continue
+
+                    author = msg_data.get("author", {})
+                    if author.get("role") != "assistant":
+                        continue
+
+                    content = msg_data.get("content", {})
+                    if content.get("content_type") == "text":
+                        parts = content.get("parts", [])
+                        if parts:
+                            final_text = parts[0] if isinstance(parts[0], str) else str(parts[0])
+                    final_message_id = msg_data.get("id", "")
+
+    except httpx.HTTPStatusError as e:
+        raise ChatGPTConversationError(f"HTTP error: {e}")
+
+    if not final_text and not final_message_id:
+        raise ChatGPTConversationError("No response received from ChatGPT conversation endpoint.")
+
+    # The conversation endpoint doesn't return structured tool calls —
+    # fall back to freetext extraction if the model output contains them
+    tool_calls: list[ToolCall] = []
+    if tools and final_text:
+        tool_calls = _extract_tool_calls_from_text(final_text)
+
+    usage = {
+        "prompt_tokens": 0,  # Not provided by this endpoint
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "model": model,
+        "via": "chatgpt-conversation",
+    }
+
+    return final_text, tool_calls, usage
+
+
 # ---------------------------------------------------------------------------
 # OpenAI-compatible completion (OpenRouter, OpenAI, etc.)
 # ---------------------------------------------------------------------------
@@ -707,10 +873,11 @@ async def chat_completion(
     - ``openrouter/...`` → OpenAI SDK with OpenRouter base URL
     - anything else → OpenAI SDK (direct OpenAI or compatible)
 
-    For OpenAI models: if ChatGPT OAuth is configured, the Codex Responses API
-    (``chatgpt.com/backend-api/codex/responses``) is tried first.  If the Codex
-    quota is exhausted, it falls back to the regular OpenAI API key path
-    (``api.openai.com/v1/chat/completions``).
+    For OpenAI models with ChatGPT OAuth configured, the fallback chain is:
+    1. ChatGPT Conversation (``chatgpt.com/backend-api/conversation``) — uses
+       the same endpoint as the ChatGPT web/desktop app (separate quota pool)
+    2. Codex Responses API (``chatgpt.com/backend-api/codex/responses``)
+    3. OpenAI API key (``api.openai.com/v1/chat/completions``) — per-token billing
     """
     # Auto-reroute through OpenRouter when direct provider key is missing
     model = _maybe_reroute_model(model)
@@ -730,28 +897,48 @@ async def chat_completion(
             provider=provider, bedrock_config=bedrock_config,
         )
 
-    # For OpenAI models: try Codex OAuth first, fall back to API key
+    # For OpenAI models: three-tier fallback with ChatGPT OAuth
+    # 1) ChatGPT Conversation → 2) Codex Responses API → 3) API key
     if _is_openai_model(model):
         oauth_token = await _get_chatgpt_oauth_token()
         if oauth_token:
+            # --- Tier 1: ChatGPT Conversation endpoint ---
             try:
-                return await _codex_oauth_completion(
+                result = await _chatgpt_conversation_completion(
                     model, messages, tools, temperature, max_tokens,
                     oauth_token=oauth_token,
                 )
-            except CodexQuotaExhaustedError:
-                # Quota exhausted — fall through to regular API key path
-                api_key = os.environ.get("OPENAI_API_KEY", "")
-                if not api_key:
-                    raise RuntimeError(
-                        "Codex subscription quota exhausted and no OPENAI_API_KEY "
-                        "configured as fallback. Either wait for your Codex quota "
-                        "to reset or add an OpenAI API key in Config > Providers."
-                    )
+                logger.debug("Request served via ChatGPT conversation endpoint.")
+                return result
+            except ChatGPTConversationError as e:
                 logger.info(
-                    "Codex quota exhausted, falling back to API key for model %s",
+                    "ChatGPT conversation endpoint failed (%s), trying Codex...", e,
+                )
+
+            # --- Tier 2: Codex Responses API ---
+            try:
+                result = await _codex_oauth_completion(
+                    model, messages, tools, temperature, max_tokens,
+                    oauth_token=oauth_token,
+                )
+                logger.debug("Request served via Codex OAuth endpoint.")
+                return result
+            except CodexQuotaExhaustedError:
+                logger.info(
+                    "Codex quota also exhausted, trying API key for model %s...",
                     model,
                 )
+
+            # --- Tier 3: fall through to API key ---
+            api_key = os.environ.get("OPENAI_API_KEY", "")
+            if not api_key:
+                raise RuntimeError(
+                    "Both ChatGPT conversation and Codex quotas are exhausted, "
+                    "and no OPENAI_API_KEY is configured as a fallback. Either "
+                    "wait for your quota to reset or add an OpenAI API key in "
+                    "Config > Providers."
+                )
+            logger.info("Falling back to OpenAI API key for model %s.", model)
 
     return await _openai_completion(
         model, messages, tools, temperature, max_tokens,

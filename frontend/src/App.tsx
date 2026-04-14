@@ -1444,15 +1444,15 @@ function App() {
                   <h3>ChatGPT OAuth (Codex)</h3>
                   <p className="config-hint">
                     Connect your ChatGPT Plus or Pro subscription to use OpenAI
-                    Codex models via the Codex Responses API &mdash; at your
-                    subscription's flat rate instead of per-token API billing.
+                    models at your subscription's flat rate &mdash; no per-token
+                    API billing.
                   </p>
                   <p className="config-hint" style={{ marginTop: 4 }}>
-                    <strong>How it works:</strong> When connected, OpenAI model
-                    requests are routed through the Codex endpoint
-                    (chatgpt.com/backend-api/codex/responses) using the Responses
-                    API format. If your Codex quota is exhausted, Cadence
-                    automatically falls back to your OpenAI API key (if configured).
+                    <strong>Fallback chain:</strong> Cadence tries three endpoints
+                    in order: (1) ChatGPT Conversation API (same as the ChatGPT
+                    desktop/web app), (2) Codex Responses API (separate quota pool),
+                    (3) OpenAI API key (per-token, only if configured). This
+                    maximizes your subscription usage before any paid API calls.
                   </p>
                   {oauthStatus?.authorized ? (
                     <div className="oauth-status-connected">
@@ -1477,9 +1477,9 @@ function App() {
                       )}
                       <div className="oauth-detail">
                         <span className="config-hint">
-                          Fallback: {keysInfo?.providers?.openai?.has_key
-                            ? 'OpenAI API key configured (will use if Codex quota runs out)'
-                            : 'No API key fallback \u2014 add an OpenAI API key above for uninterrupted access'}
+                          Last resort: {keysInfo?.providers?.openai?.has_key
+                            ? 'OpenAI API key configured (used only if both conversation and Codex quotas are exhausted)'
+                            : 'No API key fallback \u2014 optionally add one above as a safety net'}
                         </span>
                       </div>
                       <div className="oauth-actions">
@@ -1507,9 +1507,9 @@ function App() {
                         Click below to authorize Cadence with your OpenAI account.
                         You'll be redirected to OpenAI's login page.
                         Requires a ChatGPT Plus ($20/mo) or Pro ($200/mo)
-                        subscription. We recommend also keeping an OpenAI API key
-                        configured above as a fallback for when your Codex quota
-                        runs out.
+                        subscription. Cadence will use two separate subscription
+                        quota pools (Conversation + Codex) before touching any
+                        API key.
                       </p>
                       <button
                         className="oauth-connect-btn"
