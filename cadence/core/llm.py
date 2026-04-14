@@ -473,6 +473,11 @@ async def _codex_oauth_completion(
     from cadence.core.chatgpt_oauth import get_chatgpt_account_id
     chatgpt_acct = get_chatgpt_account_id()
 
+    logger.info(
+        "Codex request: model=%s, account_id=%s, input_items=%d, url=%s",
+        model, chatgpt_acct or "(none)", len(input_items), url,
+    )
+
     headers = {
         "Authorization": f"Bearer {oauth_token}",
         "Content-Type": "application/json",
@@ -488,8 +493,9 @@ async def _codex_oauth_completion(
             logger.warning("Codex quota exhausted (429). Will fall back to API key.")
             raise CodexQuotaExhaustedError("Codex subscription quota exhausted.")
         if resp.status_code == 400:
-            logger.warning("Codex returned 400 (model %s may not be supported). Falling back.", model)
-            raise CodexQuotaExhaustedError(f"Codex 400 for model {model}.")
+            body_text = resp.text[:500]
+            logger.warning("Codex returned 400 for model %s: %s", model, body_text)
+            raise CodexQuotaExhaustedError(f"Codex 400 for model {model}: {body_text}")
         if resp.status_code in (401, 403):
             body_text = resp.text
             if "quota" in body_text.lower() or "rate" in body_text.lower():
