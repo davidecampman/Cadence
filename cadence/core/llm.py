@@ -561,7 +561,6 @@ async def _chatgpt_conversation_completion(
     Raises ``ChatGPTConversationError`` on non-quota failures so the caller
     can fall back further.
     """
-    import httpx
     import uuid
     from cadence.core.chatgpt_oauth import CODEX_API_BASE_URL
 
@@ -651,55 +650,68 @@ async def _chatgpt_conversation_completion(
         model, chatgpt_acct or "(none)", len(conv_messages),
     )
 
-    # Stream the SSE response and collect the final message
+    # Use curl_cffi to impersonate a browser TLS fingerprint — the
+    # /backend-api/conversation endpoint is behind Cloudflare bot protection
+    # that blocks Python HTTP clients based on their TLS handshake.
+    try:
+        from curl_cffi.requests import AsyncSession as CurlAsyncSession
+    except ImportError:
+        raise ChatGPTConversationError(
+            "curl_cffi is required for the ChatGPT conversation endpoint. "
+            "Install it with: pip install curl_cffi"
+        )
+
     final_text = ""
     final_message_id = ""
 
     try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            async with client.stream(
-                "POST", url, json=payload, headers=headers,
-            ) as resp:
-                if resp.status_code >= 400:
-                    body = await resp.aread()
-                    body_text = body.decode("utf-8", errors="replace")[:500]
-                    logger.warning(
-                        "ChatGPT conversation endpoint returned %d: %s",
-                        resp.status_code, body_text,
-                    )
-                    raise ChatGPTConversationError(
-                        f"ChatGPT conversation error ({resp.status_code}): {body_text}"
-                    )
+        async with CurlAsyncSession(impersonate="chrome") as session:
+            resp = await session.post(
+                url, json=payload, headers=headers, timeout=120,
+            )
 
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    data_str = line[6:]
-                    if data_str == "[DONE]":
-                        break
+            if resp.status_code >= 400:
+                body_text = resp.text[:500]
+                logger.warning(
+                    "ChatGPT conversation endpoint returned %d: %s",
+                    resp.status_code, body_text,
+                )
+                raise ChatGPTConversationError(
+                    f"ChatGPT conversation error ({resp.status_code}): {body_text}"
+                )
 
-                    try:
-                        data = json.loads(data_str)
-                    except json.JSONDecodeError:
-                        continue
+            # Parse SSE lines from the response body
+            for line in resp.text.split("\n"):
+                if not line.startswith("data: "):
+                    continue
+                data_str = line[6:]
+                if data_str == "[DONE]":
+                    break
 
-                    msg_data = data.get("message")
-                    if not msg_data:
-                        continue
+                try:
+                    data = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
 
-                    author = msg_data.get("author", {})
-                    if author.get("role") != "assistant":
-                        continue
+                msg_data = data.get("message")
+                if not msg_data:
+                    continue
 
-                    content = msg_data.get("content", {})
-                    if content.get("content_type") == "text":
-                        parts = content.get("parts", [])
-                        if parts:
-                            final_text = parts[0] if isinstance(parts[0], str) else str(parts[0])
-                    final_message_id = msg_data.get("id", "")
+                author = msg_data.get("author", {})
+                if author.get("role") != "assistant":
+                    continue
 
-    except httpx.HTTPStatusError as e:
-        raise ChatGPTConversationError(f"HTTP error: {e}")
+                content = msg_data.get("content", {})
+                if content.get("content_type") == "text":
+                    parts = content.get("parts", [])
+                    if parts:
+                        final_text = parts[0] if isinstance(parts[0], str) else str(parts[0])
+                final_message_id = msg_data.get("id", "")
+
+    except ChatGPTConversationError:
+        raise
+    except Exception as e:
+        raise ChatGPTConversationError(f"curl_cffi error: {e}")
 
     if not final_text and not final_message_id:
         raise ChatGPTConversationError("No response received from ChatGPT conversation endpoint.")
