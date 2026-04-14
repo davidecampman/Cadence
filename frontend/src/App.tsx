@@ -27,6 +27,7 @@ import {
   completeOAuth,
   fetchOAuthStatus,
   revokeOAuth,
+  fetchDag,
   type AppConfig,
   type ChatResponse,
   type TraceStep,
@@ -36,11 +37,13 @@ import {
   type KeysResponse,
   type ImageAttachment,
   type OAuthStatus,
+  type DagGraph,
 } from './api'
 import BackgroundCanvas from './BackgroundCanvas'
+import TaskGraph from './TaskGraph'
 import './App.css'
 
-type View = 'chat' | 'tools' | 'skills' | 'config';
+type View = 'chat' | 'tools' | 'skills' | 'dag' | 'config';
 
 interface ChatMessage {
   id: string;
@@ -223,6 +226,8 @@ function App() {
     compression_threshold: number;
   } | null>(null);
 
+  const [dagGraph, setDagGraph] = useState<DagGraph>({ nodes: [], edges: [] });
+
   const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -368,15 +373,24 @@ function App() {
     }
   }, []);
 
-  // WebSocket for live trace
+  // WebSocket for live trace + DAG updates
   useEffect(() => {
     const ws = connectWebSocket((msg: WsMessage) => {
       if (msg.type === 'trace') {
         setTraceSteps((prev) => [...prev, msg.data]);
+      } else if (msg.type === 'dag_update') {
+        setDagGraph(msg.data);
       }
     });
     return () => ws.close();
   }, []);
+
+  // Fetch DAG snapshot whenever the user opens the graph view
+  useEffect(() => {
+    if (view === 'dag') {
+      fetchDag().then(setDagGraph).catch(() => {});
+    }
+  }, [view]);
 
   // Auto-scroll messages
   useEffect(() => {
@@ -902,6 +916,14 @@ function App() {
               Skills
               <span className="badge">{skills.length}</span>
             </button>
+            <button
+              className={`sidebar-item ${view === 'dag' ? 'active' : ''}`}
+              onClick={() => setView('dag')}
+            >
+              <span className="icon">&#x25C7;</span>
+              Task Graph
+              <span className="badge">{dagGraph.nodes.length}</span>
+            </button>
           </div>
 
           <div className="sidebar-section">
@@ -1211,6 +1233,24 @@ function App() {
                 {online ? 'No skills loaded. Upload a skill zip to get started.' : 'Connect to the API to see loaded skills.'}
               </p>
             )}
+          </div>
+        )}
+
+        {view === 'dag' && (
+          <div className="dag-panel">
+            <div className="dag-header">
+              <h2>Task Graph</h2>
+              <div className="dag-legend">
+                {(['pending', 'running', 'completed', 'failed', 'skipped'] as const).map((s) => (
+                  <span key={s} className={`dag-legend-item dag-status-${s}`}>
+                    &#x25CF; {s}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div className="dag-canvas-wrap">
+              <TaskGraph graph={dagGraph} />
+            </div>
           </div>
         )}
 
