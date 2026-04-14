@@ -51,10 +51,14 @@ DEFAULT_SCOPES = "openid profile email offline_access"
 # Where we persist encrypted OAuth credentials
 _OAUTH_PATH = _DATA_DIR / "chatgpt_oauth.enc"
 
-# Default local callback matching the Codex CLI's registered redirect pattern.
-# OpenAI whitelists "http://localhost:{port}/auth/callback" for this client ID.
-DEFAULT_CALLBACK_PORT = 8000
-DEFAULT_CALLBACK_URL = "http://localhost:8000/auth/callback"
+# The Codex CLI and Cline both hardcode port 1455 for the OAuth callback.
+# OpenAI only allows this exact redirect_uri for the public client ID.
+OAUTH_CALLBACK_PORT = 1455
+DEFAULT_CALLBACK_PORT = OAUTH_CALLBACK_PORT
+DEFAULT_CALLBACK_URL = "http://localhost:1455/auth/callback"
+
+# Port where the main Cadence server runs (for post-callback redirect)
+CADENCE_SERVER_PORT = 8000
 
 # ---------------------------------------------------------------------------
 # Codex API endpoint (different from the regular OpenAI API)
@@ -363,3 +367,104 @@ def is_oauth_configured() -> bool:
     """Check if ChatGPT OAuth credentials are stored and not empty."""
     store = _load_oauth_store()
     return bool(store.get("access_token"))
+
+
+# ---------------------------------------------------------------------------
+# Temporary OAuth callback server on port 1455
+# ---------------------------------------------------------------------------
+
+_callback_server_task: Any = None
+
+
+async def start_callback_server() -> None:
+    """Start a temporary HTTP server on port 1455 to receive the OAuth callback.
+
+    When OpenAI redirects to http://localhost:1455/auth/callback?code=...&state=...,
+    this server catches it and redirects the browser to the main Cadence server
+    at port 8000 with the same query params so the frontend can complete the flow.
+
+    Uses only stdlib (asyncio) — no extra dependencies needed.
+    """
+    import asyncio
+    from urllib.parse import urlparse, parse_qs
+
+    async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        try:
+            request_line = await asyncio.wait_for(reader.readline(), timeout=10)
+            request_str = request_line.decode("utf-8", errors="replace").strip()
+
+            # Parse "GET /auth/callback?code=...&state=... HTTP/1.1"
+            parts = request_str.split(" ")
+            if len(parts) < 2:
+                writer.close()
+                return
+
+            path_and_query = parts[1]
+            parsed = urlparse(path_and_query)
+
+            if parsed.path == "/auth/callback":
+                qs = parse_qs(parsed.query)
+                code = qs.get("code", [""])[0]
+                state = qs.get("state", [""])[0]
+
+                if code and state:
+                    redirect_url = (
+                        f"http://localhost:{CADENCE_SERVER_PORT}/auth/callback"
+                        f"?code={_url_encode(code)}&state={_url_encode(state)}"
+                    )
+                    response = (
+                        f"HTTP/1.1 302 Found\r\n"
+                        f"Location: {redirect_url}\r\n"
+                        f"Connection: close\r\n\r\n"
+                    )
+                else:
+                    response = (
+                        "HTTP/1.1 400 Bad Request\r\n"
+                        "Content-Type: text/plain\r\n"
+                        "Connection: close\r\n\r\n"
+                        "Missing code or state parameter."
+                    )
+            else:
+                response = (
+                    "HTTP/1.1 404 Not Found\r\n"
+                    "Content-Type: text/plain\r\n"
+                    "Connection: close\r\n\r\n"
+                    "Not found"
+                )
+
+            writer.write(response.encode())
+            await writer.drain()
+        except Exception:
+            pass
+        finally:
+            writer.close()
+
+    try:
+        server = await asyncio.start_server(
+            handle_client, "localhost", OAUTH_CALLBACK_PORT,
+        )
+        logger.info("OAuth callback server started on port %d", OAUTH_CALLBACK_PORT)
+    except OSError as e:
+        logger.warning("Could not start OAuth callback server on port %d: %s", OAUTH_CALLBACK_PORT, e)
+        return
+
+    # Keep running for 5 minutes, then auto-shutdown
+    try:
+        await asyncio.sleep(300)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        server.close()
+        await server.wait_closed()
+        logger.info("OAuth callback server stopped.")
+
+
+async def ensure_callback_server() -> None:
+    """Ensure the temporary callback server is running."""
+    global _callback_server_task
+    import asyncio
+
+    if _callback_server_task and not _callback_server_task.done():
+        return  # Already running
+
+    _callback_server_task = asyncio.create_task(start_callback_server())
