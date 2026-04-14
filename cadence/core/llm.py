@@ -464,6 +464,7 @@ async def _codex_oauth_completion(
         "temperature": temperature,
         "max_output_tokens": max_tokens,
         "store": False,
+        "stream": True,
     }
     payload["instructions"] = instructions or "You are a helpful assistant."
     if tools:
@@ -503,30 +504,56 @@ async def _codex_oauth_completion(
             resp.raise_for_status()
 
         resp.raise_for_status()
-        data = resp.json()
 
-    # Parse the Responses API output format
+    # Parse SSE stream — collect the final response.completed event
+    # which contains the full output and usage data.
+    data: dict[str, Any] = {}
     text_parts: list[str] = []
     tool_calls: list[ToolCall] = []
 
-    for item in data.get("output", []):
-        item_type = item.get("type", "")
-        if item_type == "message":
-            for content_block in item.get("content", []):
-                if content_block.get("type") == "output_text":
-                    text_parts.append(content_block.get("text", ""))
-                elif content_block.get("type") == "text":
-                    text_parts.append(content_block.get("text", ""))
-        elif item_type == "function_call":
-            try:
-                args = json.loads(item.get("arguments", "{}"))
-            except json.JSONDecodeError:
-                args = {"raw": item.get("arguments", "")}
-            tool_calls.append(ToolCall(
-                id=item.get("call_id", item.get("id", "")),
-                name=item.get("name", ""),
-                arguments=args,
-            ))
+    for line in resp.text.split("\n"):
+        if not line.startswith("data: "):
+            continue
+        data_str = line[6:]
+        if data_str == "[DONE]":
+            break
+        try:
+            event = json.loads(data_str)
+        except json.JSONDecodeError:
+            continue
+
+        event_type = event.get("type", "")
+
+        # The response.completed event has the full output
+        if event_type == "response.completed":
+            data = event.get("response", {})
+            break
+
+        # Accumulate text deltas as they arrive
+        if event_type == "response.output_text.delta":
+            delta = event.get("delta", "")
+            if delta:
+                text_parts.append(delta)
+
+    # Parse output from the completed response (if we got one)
+    if data.get("output"):
+        text_parts = []  # Reset — use the final output instead of deltas
+        for item in data["output"]:
+            item_type = item.get("type", "")
+            if item_type == "message":
+                for content_block in item.get("content", []):
+                    if content_block.get("type") in ("output_text", "text"):
+                        text_parts.append(content_block.get("text", ""))
+            elif item_type == "function_call":
+                try:
+                    args = json.loads(item.get("arguments", "{}"))
+                except json.JSONDecodeError:
+                    args = {"raw": item.get("arguments", "")}
+                tool_calls.append(ToolCall(
+                    id=item.get("call_id", item.get("id", "")),
+                    name=item.get("name", ""),
+                    arguments=args,
+                ))
 
     text = "\n".join(text_parts) if text_parts else ""
 
