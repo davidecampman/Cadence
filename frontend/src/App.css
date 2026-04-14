@@ -1635,6 +1635,125 @@ body.light-mode .key-input-row input {
 }
 
 /* ═══════════════════════════════════════════════
+   CHATGPT OAUTH
+   ═══════════════════════════════════════════════ */
+
+.oauth-section {
+  border: 1px solid rgba(45, 212, 191, 0.12);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.oauth-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.oauth-status-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.oauth-status-indicator.connected {
+  background: #22c55e;
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.5);
+}
+
+.oauth-status-indicator.disconnected {
+  background: var(--text-muted);
+}
+
+.oauth-status-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.oauth-account-id {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+.oauth-detail {
+  margin-left: 18px;
+  margin-top: 2px;
+}
+
+.oauth-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.oauth-connect-btn,
+.oauth-refresh-btn,
+.oauth-disconnect-btn {
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.2s;
+}
+
+.oauth-connect-btn {
+  background: linear-gradient(135deg, rgba(45, 212, 191, 0.2), rgba(59, 130, 246, 0.2));
+  border-color: rgba(45, 212, 191, 0.35);
+  color: var(--accent);
+}
+
+.oauth-connect-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(45, 212, 191, 0.3), rgba(59, 130, 246, 0.3));
+  border-color: rgba(45, 212, 191, 0.5);
+  box-shadow: 0 0 12px var(--accent-glow);
+}
+
+.oauth-connect-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.oauth-refresh-btn {
+  background: rgba(10, 20, 50, 0.4);
+  border-color: var(--border);
+  color: var(--text-secondary);
+}
+
+.oauth-refresh-btn:hover {
+  border-color: rgba(45, 212, 191, 0.3);
+  color: var(--text-primary);
+}
+
+.oauth-disconnect-btn {
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.25);
+  color: #ef4444;
+}
+
+.oauth-disconnect-btn:hover {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+body.light-mode .oauth-section {
+  border-color: rgba(45, 212, 191, 0.2);
+}
+
+body.light-mode .oauth-connect-btn {
+  background: linear-gradient(135deg, rgba(45, 212, 191, 0.12), rgba(59, 130, 246, 0.12));
+}
+
+body.light-mode .oauth-refresh-btn {
+  background: rgba(255, 255, 255, 0.6);
+}
+
+/* ═══════════════════════════════════════════════
    TOOL PERMISSIONS
    ═══════════════════════════════════════════════ */
 .tool-category {

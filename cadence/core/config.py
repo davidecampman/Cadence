@@ -31,12 +31,19 @@ class LocalModelsConfig(BaseModel):
     supports_tool_use: bool = False  # Whether the local model supports native tool calling
 
 
+class ChatGPTOAuthConfig(BaseModel):
+    """ChatGPT OAuth configuration for subscription-based access."""
+    enabled: bool = False
+    callback_port: int = 18756  # Local port for the OAuth callback server
+
+
 class ModelsConfig(BaseModel):
     strong: str = "claude-sonnet-4-5-20250514"
     fast: str = "claude-haiku-4-5-20251001"
     embedding: str = "text-embedding-3-small"
     fallback_chain: list[str] = Field(default_factory=lambda: ["gpt-4o", "claude-sonnet-4-5-20250514"])
     bedrock: BedrockConfig = Field(default_factory=BedrockConfig)
+    chatgpt_oauth: ChatGPTOAuthConfig = Field(default_factory=ChatGPTOAuthConfig)
     local: LocalModelsConfig = Field(default_factory=LocalModelsConfig)
 
 

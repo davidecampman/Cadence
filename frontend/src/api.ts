@@ -235,6 +235,57 @@ export async function fetchModels(provider: string, tier?: string): Promise<Mode
   return res.json();
 }
 
+// --- ChatGPT OAuth ---
+
+export interface OAuthStatus {
+  authorized: boolean;
+  account_id: string | null;
+  scope: string | null;
+  expires_at: number | null;
+  created_at?: number | null;
+}
+
+export interface OAuthInitiateResponse {
+  authorize_url: string;
+  callback_url: string;
+  callback_port: number;
+}
+
+export async function initiateOAuth(callbackUrl?: string): Promise<OAuthInitiateResponse> {
+  const res = await fetch(`${API_BASE}/oauth/chatgpt/initiate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ callback_url: callbackUrl || null }),
+  });
+  if (!res.ok) throw new Error(`OAuth initiate failed: ${res.status}`);
+  return res.json();
+}
+
+export async function completeOAuth(
+  code: string,
+  state: string,
+  callbackUrl?: string,
+): Promise<Record<string, unknown>> {
+  const res = await fetch(`${API_BASE}/oauth/chatgpt/callback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code, state, callback_url: callbackUrl || null }),
+  });
+  if (!res.ok) throw new Error(`OAuth callback failed: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchOAuthStatus(): Promise<OAuthStatus> {
+  const res = await fetch(`${API_BASE}/oauth/chatgpt/status`);
+  if (!res.ok) throw new Error(`OAuth status fetch failed: ${res.status}`);
+  return res.json();
+}
+
+export async function revokeOAuth(): Promise<void> {
+  const res = await fetch(`${API_BASE}/oauth/chatgpt/revoke`, { method: 'POST' });
+  if (!res.ok) throw new Error(`OAuth revoke failed: ${res.status}`);
+}
+
 // --- Chat persistence ---
 
 export interface ChatMessageRecord {

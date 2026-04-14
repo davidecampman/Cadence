@@ -23,6 +23,10 @@ import {
   updateChat as apiUpdateChat,
   deleteChat as apiDeleteChat,
   addChatMessage,
+  initiateOAuth,
+  completeOAuth,
+  fetchOAuthStatus,
+  revokeOAuth,
   type AppConfig,
   type ChatResponse,
   type TraceStep,
@@ -31,6 +35,7 @@ import {
   type WsMessage,
   type KeysResponse,
   type ImageAttachment,
+  type OAuthStatus,
 } from './api'
 import BackgroundCanvas from './BackgroundCanvas'
 import './App.css'
@@ -160,6 +165,8 @@ function App() {
   const [bedrockApiKey, setBedrockApiKey] = useState('');
   const [bedrockAccessKeyId, setBedrockAccessKeyId] = useState('');
   const [bedrockSecretAccessKey, setBedrockSecretAccessKey] = useState('');
+  const [oauthStatus, setOauthStatus] = useState<OAuthStatus | null>(null);
+  const [oauthLoading, setOauthLoading] = useState(false);
   const [providerModels, setProviderModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelFilter, setModelFilter] = useState('');
@@ -321,6 +328,30 @@ function App() {
     fetchSkills().then(setSkills).catch(() => {});
     fetchConfig().then(setConfig).catch(() => {});
     fetchKeys().then(setKeysInfo).catch(() => {});
+    fetchOAuthStatus().then(setOauthStatus).catch(() => {});
+  }, []);
+
+  // Handle OAuth callback — when redirected back from OpenAI with ?code=...&state=...
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    const state = params.get('state');
+    if (code && state && window.location.pathname === '/oauth/callback') {
+      // Clear the URL params so we don't re-process on refresh
+      window.history.replaceState({}, '', '/');
+      setView('config');
+      setOauthLoading(true);
+      completeOAuth(code, state)
+        .then(() => fetchOAuthStatus())
+        .then((status) => {
+          setOauthStatus(status);
+          setOauthLoading(false);
+        })
+        .catch((err) => {
+          alert(`OAuth authorization failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+          setOauthLoading(false);
+        });
+    }
   }, []);
 
   // WebSocket for live trace
@@ -512,6 +543,29 @@ function App() {
       setKeysInfo(updated);
     } catch (err) {
       alert(`Failed to delete key: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  }, []);
+
+  const handleOAuthConnect = useCallback(async () => {
+    setOauthLoading(true);
+    try {
+      const { authorize_url } = await initiateOAuth();
+      // Open the authorization URL in a new window/tab
+      window.open(authorize_url, '_blank', 'width=600,height=700');
+    } catch (err) {
+      alert(`Failed to start OAuth flow: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setOauthLoading(false);
+    }
+  }, []);
+
+  const handleOAuthDisconnect = useCallback(async () => {
+    if (!confirm('Disconnect ChatGPT OAuth? You will need to re-authorize to use subscription-based access.')) return;
+    try {
+      await revokeOAuth();
+      setOauthStatus({ authorized: false, account_id: null, scope: null, expires_at: null });
+    } catch (err) {
+      alert(`Failed to revoke OAuth: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
   }, []);
 
@@ -1381,6 +1435,89 @@ function App() {
                           <span className="config-hint" style={{ fontStyle: 'italic' }}>No models found for this provider</span>
                         )}
                       </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* ChatGPT OAuth (Codex) */}
+                <div className="config-section oauth-section">
+                  <h3>ChatGPT OAuth (Codex)</h3>
+                  <p className="config-hint">
+                    Connect your ChatGPT Plus or Pro subscription to use OpenAI
+                    models at your subscription's flat rate &mdash; no per-token
+                    API billing.
+                  </p>
+                  <p className="config-hint" style={{ marginTop: 4 }}>
+                    <strong>Fallback chain:</strong> Cadence tries three endpoints
+                    in order: (1) ChatGPT Conversation API (same as the ChatGPT
+                    desktop/web app), (2) Codex Responses API (separate quota pool),
+                    (3) OpenAI API key (per-token, only if configured). This
+                    maximizes your subscription usage before any paid API calls.
+                  </p>
+                  {oauthStatus?.authorized ? (
+                    <div className="oauth-status-connected">
+                      <div className="oauth-status-row">
+                        <span className="oauth-status-indicator connected" />
+                        <span className="oauth-status-label">Connected</span>
+                        {oauthStatus.account_id && (
+                          <span className="oauth-account-id">({oauthStatus.account_id})</span>
+                        )}
+                      </div>
+                      {oauthStatus.scope && (
+                        <div className="oauth-detail">
+                          <span className="config-hint">Scopes: {oauthStatus.scope}</span>
+                        </div>
+                      )}
+                      {oauthStatus.expires_at && (
+                        <div className="oauth-detail">
+                          <span className="config-hint">
+                            Token expires: {new Date(oauthStatus.expires_at * 1000).toLocaleString()}
+                          </span>
+                        </div>
+                      )}
+                      <div className="oauth-detail">
+                        <span className="config-hint">
+                          Last resort: {keysInfo?.providers?.openai?.has_key
+                            ? 'OpenAI API key configured (used only if both conversation and Codex quotas are exhausted)'
+                            : 'No API key fallback \u2014 optionally add one above as a safety net'}
+                        </span>
+                      </div>
+                      <div className="oauth-actions">
+                        <button
+                          className="oauth-refresh-btn"
+                          onClick={() => fetchOAuthStatus().then(setOauthStatus).catch(() => {})}
+                        >
+                          Refresh Status
+                        </button>
+                        <button
+                          className="oauth-disconnect-btn"
+                          onClick={handleOAuthDisconnect}
+                        >
+                          Disconnect
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="oauth-status-disconnected">
+                      <div className="oauth-status-row">
+                        <span className="oauth-status-indicator disconnected" />
+                        <span className="oauth-status-label">Not connected</span>
+                      </div>
+                      <p className="config-hint" style={{ margin: '8px 0' }}>
+                        Click below to authorize Cadence with your OpenAI account.
+                        You'll be redirected to OpenAI's login page.
+                        Requires a ChatGPT Plus ($20/mo) or Pro ($200/mo)
+                        subscription. Cadence will use two separate subscription
+                        quota pools (Conversation + Codex) before touching any
+                        API key.
+                      </p>
+                      <button
+                        className="oauth-connect-btn"
+                        onClick={handleOAuthConnect}
+                        disabled={oauthLoading}
+                      >
+                        {oauthLoading ? 'Starting...' : 'Connect ChatGPT Account'}
+                      </button>
                     </div>
                   )}
                 </div>
