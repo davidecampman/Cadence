@@ -474,6 +474,10 @@ class Orchestrator:
         # Phase 4: Self-evaluate
         final = await self._evaluate(user_request, final)
 
+        # Phase 4b: Correction pass if self-evaluation flagged issues
+        if "Self-review flagged" in final:
+            final = await self._correction_run(user_request, final)
+
         # Record learning outcome
         if self.learning_store:
             task_type = self.learning_store.classify_task(user_request)
@@ -801,6 +805,43 @@ class Orchestrator:
         # If evaluation fails, note it but return the response anyway
         self.trace.thought("orchestrator", f"Self-evaluation flagged issues: {text[:200]}")
         return response + f"\n\n---\n*Note: Self-review flagged: {text.strip()}*"
+
+    async def _correction_run(self, request: str, flagged_response: str) -> str:
+        """Attempt one correction pass after self-evaluation flags an issue.
+
+        Spawns a general agent with explicit instructions to use tools for any
+        concrete actions (file creation, code execution, etc.) rather than just
+        describing them.
+        """
+        marker = "*Note: Self-review flagged:"
+        note_start = flagged_response.rfind(marker)
+        failure_reason = (
+            flagged_response[note_start:].strip()
+            if note_start != -1
+            else "The response did not fully complete the task."
+        )
+
+        self.trace.thought(
+            "orchestrator",
+            f"Correction pass triggered: {failure_reason[:120]}",
+        )
+
+        agent = self._spawn_agent("general")
+        correction_prompt = (
+            f"{self._format_history_block()}"
+            f"The user asked: {request}\n\n"
+            f"A previous attempt failed quality review:\n{failure_reason}\n\n"
+            "Please complete the request properly. For any concrete action — creating files, "
+            "writing code, zipping archives, running commands — you MUST use the appropriate "
+            "tool to actually perform the action. Do not describe what you would do; do it."
+        )
+        corrected = await agent.run(
+            correction_prompt,
+            conversation_history=self._conversation_history,
+            images=self._images,
+        )
+        self._session_tokens += agent._total_tokens
+        return corrected
 
     def _spawn_agent(self, role_name: str) -> Agent:
         """Create a specialist agent."""
