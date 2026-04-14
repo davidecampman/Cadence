@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any
+from typing import Any, Callable
 
 from cadence.agents.collaboration import (
     CollaborationEngine,
@@ -300,6 +300,9 @@ class Orchestrator:
         self._session_tokens: int = 0
         self._session_id: str = ""
 
+        # Callback invoked whenever a task's status changes; set by API layer for live streaming
+        self.on_task_update: Callable[[TaskDAG], None] | None = None
+
         # Inter-agent communication
         self.message_bus = message_bus
 
@@ -408,6 +411,8 @@ class Orchestrator:
             self.dag.add(task)
 
         self.trace.thought("orchestrator", f"Plan:\n{self.dag.summary()}")
+        if self.on_task_update:
+            self.on_task_update(self.dag)
 
         # Phase 2: Execute the DAG
         results: dict[str, str] = {}
@@ -706,12 +711,16 @@ class Orchestrator:
         task_prompt = "\n".join(context_parts)
 
         self.trace.action("orchestrator", f"Assigning [{task.id[:6]}] to {agent.id}")
+        if self.on_task_update:
+            self.on_task_update(self.dag)
         try:
             result = await agent.run(task_prompt)
             task.status = TaskStatus.COMPLETED
             task.result = result
             results[task.id] = result
             self.trace.result("orchestrator", f"Task [{task.id[:6]}] completed")
+            if self.on_task_update:
+                self.on_task_update(self.dag)
 
             # Publish task completion on message bus
             if self.message_bus:
@@ -725,6 +734,8 @@ class Orchestrator:
             task.result = f"Error: {e}"
             results[task.id] = task.result
             self.trace.error("orchestrator", f"Task [{task.id[:6]}] failed: {e}")
+            if self.on_task_update:
+                self.on_task_update(self.dag)
 
             # Publish failure on message bus
             if self.message_bus:

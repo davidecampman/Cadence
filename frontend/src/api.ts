@@ -375,8 +375,33 @@ export async function revealFile(path: string): Promise<void> {
   await fetch(`${API_BASE}/files/reveal?path=${encodeURIComponent(path)}`);
 }
 
+export interface DagNode {
+  id: string;
+  description: string;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'blocked';
+  role: string;
+  assigned_agent: string | null;
+}
+
+export interface DagEdge {
+  from: string;
+  to: string;
+}
+
+export interface DagGraph {
+  nodes: DagNode[];
+  edges: DagEdge[];
+}
+
+export async function fetchDag(): Promise<DagGraph> {
+  const res = await fetch(`${API_BASE}/dag`);
+  if (!res.ok) throw new Error(`DAG fetch failed: ${res.status}`);
+  return res.json();
+}
+
 export type WsMessage =
   | { type: 'trace'; data: TraceStep }
+  | { type: 'dag_update'; data: DagGraph }
   | { type: 'pong' };
 
 export function connectWebSocket(onMessage: (msg: WsMessage) => void): WebSocket {

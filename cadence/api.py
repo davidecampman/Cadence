@@ -115,6 +115,37 @@ async def _broadcast_trace(step: TraceStep) -> None:
     _ws_clients -= dead
 
 
+async def _broadcast_dag(dag_data: dict) -> None:
+    """Send a DAG snapshot to all connected WebSocket clients."""
+    global _ws_clients
+    msg = json.dumps({"type": "dag_update", "data": dag_data})
+    dead = set()
+    for ws in _ws_clients:
+        try:
+            await ws.send_text(msg)
+        except Exception:
+            dead.add(ws)
+    _ws_clients -= dead
+
+
+def _serialize_dag(dag) -> dict:
+    """Convert a TaskDAG into a JSON-serialisable dict of nodes and edges."""
+    from cadence.agents.orchestrator import TaskDAG
+    nodes = []
+    edges = []
+    for task in dag._tasks.values():
+        nodes.append({
+            "id": task.id,
+            "description": task.description,
+            "status": task.status.value,
+            "role": task.metadata.get("role", "general"),
+            "assigned_agent": task.assigned_agent,
+        })
+        for dep_id in task.dependencies:
+            edges.append({"from": dep_id, "to": task.id})
+    return {"nodes": nodes, "edges": edges}
+
+
 # Monkey-patch the trace logger to broadcast steps
 _original_log = None
 
@@ -124,6 +155,15 @@ def _patched_log(step: TraceStep) -> None:
     try:
         loop = asyncio.get_running_loop()
         loop.create_task(_broadcast_trace(step))
+    except RuntimeError:
+        pass
+
+
+def _on_task_update(dag) -> None:
+    """Called by the orchestrator whenever a task changes status."""
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_broadcast_dag(_serialize_dag(dag)))
     except RuntimeError:
         pass
 
@@ -159,6 +199,8 @@ async def startup():
     agent_app = get_app()
     _original_log = agent_app.trace.log
     agent_app.trace.log = _patched_log
+    # Wire DAG update callback for live graph streaming
+    agent_app.orchestrator.on_task_update = _on_task_update
     # Connect to configured MCP servers
     await agent_app.connect_mcp_servers()
 
@@ -480,6 +522,13 @@ async def get_trace(limit: int = 50):
     agent_app = get_app()
     steps = agent_app.trace.steps[-limit:]
     return [s.model_dump() for s in steps]
+
+
+@app.get("/api/dag")
+async def get_dag():
+    """Return the current task DAG as nodes + edges for graph visualisation."""
+    agent_app = get_app()
+    return _serialize_dag(agent_app.orchestrator.dag)
 
 
 class ApiKeyRequest(BaseModel):

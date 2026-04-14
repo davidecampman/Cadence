@@ -1895,3 +1895,79 @@ body.light-mode .tool-toggle-tier.tier-unrestricted {
     display: none;
   }
 }
+
+/* ═══════════════════════════════════════════════
+   TASK GRAPH VIEW
+   ═══════════════════════════════════════════════ */
+.dag-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.dag-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 28px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.dag-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.dag-legend {
+  display: flex;
+  gap: 16px;
+  font-size: 11px;
+  text-transform: capitalize;
+}
+
+.dag-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 500;
+}
+
+.dag-status-pending   { color: #94a3b8; }
+.dag-status-running   { color: #fbbf24; }
+.dag-status-completed { color: #4ade80; }
+.dag-status-failed    { color: #f87171; }
+.dag-status-skipped   { color: #a5b4fc; }
+
+.dag-canvas-wrap {
+  flex: 1;
+  overflow: auto;
+  padding: 24px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.dag-svg {
+  font-family: var(--font-mono, 'JetBrains Mono', 'Fira Code', monospace);
+  display: block;
+  max-width: 100%;
+}
+
+.dag-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-muted);
+  padding: 60px 20px;
+  text-align: center;
+}
+
+.dag-empty p {
+  font-size: 14px;
+  margin: 0;
+}
