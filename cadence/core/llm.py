@@ -461,7 +461,6 @@ async def _codex_oauth_completion(
     payload: dict[str, Any] = {
         "model": model,
         "input": input_items,
-        "max_output_tokens": max_tokens,
         "store": False,
         "stream": True,
     }
