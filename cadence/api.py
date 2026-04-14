@@ -39,6 +39,7 @@ from cadence.core.chatgpt_oauth import (
     exchange_code,
     get_oauth_status,
     revoke_oauth,
+    ensure_callback_server,
     DEFAULT_CALLBACK_PORT,
     DEFAULT_CALLBACK_URL,
 )
@@ -631,9 +632,11 @@ class OAuthCallbackRequest(BaseModel):
 async def oauth_chatgpt_initiate(req: OAuthInitRequest | None = None):
     """Start the ChatGPT OAuth PKCE flow.
 
-    Returns the authorization URL the user should open in their browser.
+    Spins up a temporary callback server on port 1455 (the only port OpenAI
+    accepts for this client ID), then returns the authorization URL.
     """
     callback = (req.callback_url if req and req.callback_url else None) or DEFAULT_CALLBACK_URL
+    await ensure_callback_server()
     auth_url = build_authorize_url(callback_url=callback)
     return {
         "authorize_url": auth_url,
