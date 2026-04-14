@@ -470,18 +470,26 @@ async def _codex_oauth_completion(
     if tools:
         payload["tools"] = _tools_to_responses_api(tools)
 
+    from cadence.core.chatgpt_oauth import get_chatgpt_account_id
+    chatgpt_acct = get_chatgpt_account_id()
+
     headers = {
         "Authorization": f"Bearer {oauth_token}",
         "Content-Type": "application/json",
     }
+    if chatgpt_acct:
+        headers["ChatGPT-Account-Id"] = chatgpt_acct
 
     async with httpx.AsyncClient(timeout=120) as client:
         resp = await client.post(url, json=payload, headers=headers)
 
-        # Detect quota exhaustion (429 or specific 403/401 errors)
+        # Detect quota exhaustion or unsupported model (429, 400, 401, 403)
         if resp.status_code == 429:
             logger.warning("Codex quota exhausted (429). Will fall back to API key.")
             raise CodexQuotaExhaustedError("Codex subscription quota exhausted.")
+        if resp.status_code == 400:
+            logger.warning("Codex returned 400 (model %s may not be supported). Falling back.", model)
+            raise CodexQuotaExhaustedError(f"Codex 400 for model {model}.")
         if resp.status_code in (401, 403):
             body_text = resp.text
             if "quota" in body_text.lower() or "rate" in body_text.lower():
@@ -618,11 +626,16 @@ async def _chatgpt_conversation_completion(
             "metadata": {},
         })
 
+    from cadence.core.chatgpt_oauth import get_chatgpt_account_id
+    chatgpt_acct = get_chatgpt_account_id()
+
     headers = {
         "Authorization": f"Bearer {oauth_token}",
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
     }
+    if chatgpt_acct:
+        headers["ChatGPT-Account-Id"] = chatgpt_acct
 
     # Stream the SSE response and collect the final message
     final_text = ""

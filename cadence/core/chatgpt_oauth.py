@@ -220,8 +220,9 @@ async def exchange_code(
     expires_in = token_data.get("expires_in", 3600)
     scope = token_data.get("scope", "")
 
-    # Extract account ID from the access token (JWT payload)
+    # Extract account IDs from the access token (JWT payload)
     account_id = _extract_account_id(access_token)
+    chatgpt_account_id = _extract_chatgpt_account_id(access_token)
 
     credentials = {
         "access_token": access_token,
@@ -229,6 +230,7 @@ async def exchange_code(
         "expires_at": time.time() + expires_in,
         "scope": scope,
         "account_id": account_id,
+        "chatgpt_account_id": chatgpt_account_id,
         "created_at": time.time(),
     }
 
@@ -245,25 +247,50 @@ async def exchange_code(
     }
 
 
-def _extract_account_id(access_token: str) -> str:
-    """Extract the account ID from a JWT access token's payload.
+def _decode_jwt_payload(token: str) -> dict[str, Any]:
+    """Decode a JWT token's payload (without verification).
 
-    Returns an empty string if extraction fails (non-critical).
+    Returns the payload dict, or empty dict on failure.
     """
     try:
-        parts = access_token.split(".")
+        parts = token.split(".")
         if len(parts) < 2:
-            return ""
-        # JWT payload is base64url-encoded
+            return {}
         payload_b64 = parts[1]
-        # Pad to multiple of 4
         padding = 4 - len(payload_b64) % 4
         if padding != 4:
             payload_b64 += "=" * padding
-        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
-        return payload.get("sub", payload.get("account_id", ""))
+        return json.loads(base64.urlsafe_b64decode(payload_b64))
     except Exception:
-        return ""
+        return {}
+
+
+def _extract_account_id(access_token: str) -> str:
+    """Extract the account ID from a JWT access token's payload."""
+    payload = _decode_jwt_payload(access_token)
+    return payload.get("sub", payload.get("account_id", ""))
+
+
+def _extract_chatgpt_account_id(access_token: str) -> str:
+    """Extract the ChatGPT account ID needed for the ChatGPT-Account-Id header.
+
+    Cline parses this from the ``https://api.openai.com/auth`` or
+    ``https://api.openai.com/profile`` JWT claims.
+    """
+    payload = _decode_jwt_payload(access_token)
+    # Try known claim paths
+    auth_claims = payload.get("https://api.openai.com/auth", {})
+    if isinstance(auth_claims, dict):
+        acct_id = auth_claims.get("account_id", "")
+        if acct_id:
+            return acct_id
+    profile_claims = payload.get("https://api.openai.com/profile", {})
+    if isinstance(profile_claims, dict):
+        acct_id = profile_claims.get("account_id", "")
+        if acct_id:
+            return acct_id
+    # Fallback to sub
+    return payload.get("sub", "")
 
 
 async def refresh_access_token() -> str | None:
@@ -367,6 +394,23 @@ def is_oauth_configured() -> bool:
     """Check if ChatGPT OAuth credentials are stored and not empty."""
     store = _load_oauth_store()
     return bool(store.get("access_token"))
+
+
+def get_chatgpt_account_id() -> str:
+    """Return the ChatGPT account ID for the ChatGPT-Account-Id header.
+
+    Falls back to re-extracting from the stored access token if not
+    persisted (e.g. credentials saved before this field was added).
+    """
+    store = _load_oauth_store()
+    acct_id = store.get("chatgpt_account_id", "")
+    if acct_id:
+        return acct_id
+    # Fallback: extract from stored token
+    token = store.get("access_token", "")
+    if token:
+        return _extract_chatgpt_account_id(token)
+    return ""
 
 
 # ---------------------------------------------------------------------------
