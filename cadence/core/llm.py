@@ -9,12 +9,13 @@ Supports two provider paths:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import random
 import re
-from typing import Any
+from typing import Any, AsyncIterator
 
 import anthropic
 import openai
@@ -22,6 +23,107 @@ import openai
 from cadence.core.types import Message, Role, ToolCall, ToolDefinition
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Error classification — transient vs permanent
+# ---------------------------------------------------------------------------
+
+class LLMError(Exception):
+    """Base class for LLM errors with classification."""
+    def __init__(self, message: str, transient: bool = False, provider: str = ""):
+        super().__init__(message)
+        self.transient = transient
+        self.provider = provider
+
+
+def _classify_error(e: Exception) -> LLMError:
+    """Classify an exception as transient (retryable) or permanent (fail fast)."""
+    msg = str(e)
+    err_type = type(e).__name__
+
+    # Transient: rate limits, timeouts, server errors, network issues
+    transient_patterns = (
+        "rate_limit", "rate limit", "429", "timeout", "timed out",
+        "connection", "503", "502", "500", "overloaded", "capacity",
+        "server_error", "internal_error", "temporarily", "retry",
+    )
+    # Permanent: auth errors, invalid requests, model not found
+    permanent_patterns = (
+        "authentication", "api_key", "invalid_api_key", "permission",
+        "not_found", "model_not_found", "invalid_request", "malformed",
+        "401", "403", "404",
+    )
+
+    msg_lower = msg.lower()
+
+    for pattern in permanent_patterns:
+        if pattern in msg_lower or pattern in err_type.lower():
+            return LLMError(msg, transient=False, provider=err_type)
+
+    for pattern in transient_patterns:
+        if pattern in msg_lower or pattern in err_type.lower():
+            return LLMError(msg, transient=True, provider=err_type)
+
+    # Network-level errors are transient
+    if isinstance(e, (ConnectionError, TimeoutError, asyncio.TimeoutError)):
+        return LLMError(msg, transient=True, provider=err_type)
+    if isinstance(e, (openai.APIConnectionError, openai.APITimeoutError)):
+        return LLMError(msg, transient=True, provider="openai")
+    if isinstance(e, openai.RateLimitError):
+        return LLMError(msg, transient=True, provider="openai")
+    if isinstance(e, openai.AuthenticationError):
+        return LLMError(msg, transient=False, provider="openai")
+
+    # Default: treat as transient to allow retry
+    return LLMError(msg, transient=True, provider=err_type)
+
+
+async def _retry_with_backoff(
+    coro_factory,
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+):
+    """Retry a coroutine with exponential backoff for transient errors."""
+    last_error = None
+    for attempt in range(max_retries + 1):
+        try:
+            return await coro_factory()
+        except Exception as e:
+            classified = _classify_error(e)
+            if not classified.transient or attempt == max_retries:
+                raise classified from e
+            last_error = classified
+            delay = base_delay * (2 ** attempt) + random.uniform(0, 0.5)
+            logger.warning(
+                "Transient LLM error (attempt %d/%d), retrying in %.1fs: %s",
+                attempt + 1, max_retries + 1, delay, e,
+            )
+            await asyncio.sleep(delay)
+    raise last_error  # Should not reach here
+
+
+# ---------------------------------------------------------------------------
+# Token estimation helpers
+# ---------------------------------------------------------------------------
+
+def estimate_tokens(text: str) -> int:
+    """Rough token estimate: ~4 chars per token for English text."""
+    return max(1, len(text) // 4)
+
+
+def estimate_message_tokens(messages: list[Message], tools: list[ToolDefinition] | None = None) -> int:
+    """Estimate total tokens for a set of messages and tool definitions."""
+    total = 0
+    for msg in messages:
+        total += estimate_tokens(msg.content or "")
+        if msg.tool_calls:
+            for tc in msg.tool_calls:
+                total += estimate_tokens(json.dumps(tc.arguments))
+    if tools:
+        for t in tools:
+            total += estimate_tokens(t.description) + estimate_tokens(json.dumps(t.parameters))
+    return total
 
 
 # ---------------------------------------------------------------------------
@@ -135,18 +237,30 @@ def _tools_to_dicts(tools: list[ToolDefinition]) -> list[dict[str, Any]]:
 
 def _messages_to_anthropic(
     messages: list[Message],
-) -> tuple[str | anthropic.NotGiven, list[dict[str, Any]]]:
+    enable_cache: bool = False,
+) -> tuple[str | list[dict[str, Any]] | anthropic.NotGiven, list[dict[str, Any]]]:
     """Convert Message objects to Anthropic SDK format.
 
     Returns ``(system_prompt, messages)`` — Anthropic takes the system prompt
     as a separate parameter rather than a system message in the list.
+
+    When ``enable_cache`` is True, the system prompt is returned as a list of
+    content blocks with ``cache_control`` markers for prompt caching.
     """
-    system: str | anthropic.NotGiven = anthropic.NOT_GIVEN
+    system: str | list[dict[str, Any]] | anthropic.NotGiven = anthropic.NOT_GIVEN
     result: list[dict[str, Any]] = []
 
     for msg in messages:
         if msg.role == Role.SYSTEM:
-            system = msg.content
+            if enable_cache:
+                # Return system as content blocks with cache_control for prompt caching
+                system = [{
+                    "type": "text",
+                    "text": msg.content,
+                    "cache_control": {"type": "ephemeral"},
+                }]
+            else:
+                system = msg.content
             continue
 
         if msg.role == Role.TOOL:
@@ -932,6 +1046,7 @@ async def _anthropic_completion(
     max_tokens: int,
     provider: str,
     bedrock_config=None,
+    enable_cache: bool = True,
 ) -> tuple[str, list[ToolCall], dict[str, Any]]:
     """Call the Anthropic API (direct or Bedrock) and return (text, tool_calls, usage)."""
 
@@ -941,7 +1056,9 @@ async def _anthropic_completion(
         api_model = model
 
     client = _build_anthropic_client(provider, bedrock_config)
-    system, api_messages = _messages_to_anthropic(messages)
+    # Enable prompt caching for direct Anthropic (not Bedrock)
+    use_cache = enable_cache and provider == "anthropic"
+    system, api_messages = _messages_to_anthropic(messages, enable_cache=use_cache)
 
     kwargs: dict[str, Any] = {
         "model": api_model,
@@ -977,8 +1094,164 @@ async def _anthropic_completion(
         "total_tokens": response.usage.input_tokens + response.usage.output_tokens,
         "model": model,
     }
+    # Include cache metrics if available
+    if hasattr(response.usage, "cache_creation_input_tokens"):
+        usage["cache_creation_tokens"] = response.usage.cache_creation_input_tokens
+    if hasattr(response.usage, "cache_read_input_tokens"):
+        usage["cache_read_tokens"] = response.usage.cache_read_input_tokens
 
     return text, tool_calls, usage
+
+
+async def stream_completion(
+    model: str,
+    messages: list[Message],
+    tools: list[ToolDefinition] | None = None,
+    temperature: float = 0.7,
+    max_tokens: int = 4096,
+    bedrock_config=None,
+    local_config=None,
+) -> AsyncIterator[dict[str, Any]]:
+    """Stream an LLM completion, yielding events as they arrive.
+
+    Yields dicts with keys:
+    - ``{"type": "token", "text": "..."}`` — partial text
+    - ``{"type": "tool_use_start", "id": "...", "name": "..."}`` — tool call begins
+    - ``{"type": "tool_use_input", "partial_json": "..."}`` — tool input delta
+    - ``{"type": "done", "text": "...", "tool_calls": [...], "usage": {...}}`` — final result
+
+    Falls back to non-streaming if the provider doesn't support it.
+    """
+    model = _maybe_reroute_model(model)
+
+    if bedrock_config and bedrock_config.enabled:
+        model = _to_bedrock_model(model, region=bedrock_config.region)
+        _configure_bedrock_env(bedrock_config)
+    elif _is_bedrock_model(model):
+        _configure_bedrock_from_env()
+
+    provider = _get_provider(model)
+
+    # Streaming is supported for Anthropic direct and Bedrock
+    if provider in ("bedrock", "anthropic"):
+        async for event in _anthropic_stream(
+            model, messages, tools, temperature, max_tokens,
+            provider=provider, bedrock_config=bedrock_config,
+        ):
+            yield event
+        return
+
+    # For other providers, fall back to non-streaming and emit as a single chunk
+    text, tool_calls, usage = await chat_completion(
+        model, messages, tools, temperature, max_tokens,
+        bedrock_config=bedrock_config, local_config=local_config,
+    )
+    if text:
+        yield {"type": "token", "text": text}
+    yield {
+        "type": "done",
+        "text": text,
+        "tool_calls": [tc.model_dump() for tc in tool_calls],
+        "usage": usage,
+    }
+
+
+async def _anthropic_stream(
+    model: str,
+    messages: list[Message],
+    tools: list[ToolDefinition] | None,
+    temperature: float,
+    max_tokens: int,
+    provider: str,
+    bedrock_config=None,
+) -> AsyncIterator[dict[str, Any]]:
+    """Stream from the Anthropic API, yielding events."""
+    if provider == "bedrock":
+        api_model = _strip_bedrock_prefix(model)
+    else:
+        api_model = model
+
+    client = _build_anthropic_client(provider, bedrock_config)
+    use_cache = provider == "anthropic"
+    system, api_messages = _messages_to_anthropic(messages, enable_cache=use_cache)
+
+    kwargs: dict[str, Any] = {
+        "model": api_model,
+        "messages": api_messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    if system is not anthropic.NOT_GIVEN:
+        kwargs["system"] = system
+    if tools:
+        kwargs["tools"] = _tools_to_anthropic(tools)
+
+    text_parts: list[str] = []
+    tool_calls: list[ToolCall] = []
+    current_tool_id = ""
+    current_tool_name = ""
+    current_tool_json = ""
+
+    usage: dict[str, Any] = {}
+
+    async with client.messages.stream(**kwargs) as stream:
+        async for event in stream:
+            if event.type == "content_block_start":
+                block = event.content_block
+                if block.type == "tool_use":
+                    current_tool_id = block.id
+                    current_tool_name = block.name
+                    current_tool_json = ""
+                    yield {"type": "tool_use_start", "id": block.id, "name": block.name}
+            elif event.type == "content_block_delta":
+                delta = event.delta
+                if delta.type == "text_delta":
+                    text_parts.append(delta.text)
+                    yield {"type": "token", "text": delta.text}
+                elif delta.type == "input_json_delta":
+                    current_tool_json += delta.partial_json
+                    yield {"type": "tool_use_input", "partial_json": delta.partial_json}
+            elif event.type == "content_block_stop":
+                if current_tool_name:
+                    try:
+                        args = json.loads(current_tool_json) if current_tool_json else {}
+                    except json.JSONDecodeError:
+                        args = {"raw": current_tool_json}
+                    tool_calls.append(ToolCall(
+                        id=current_tool_id,
+                        name=current_tool_name,
+                        arguments=args,
+                    ))
+                    current_tool_name = ""
+                    current_tool_json = ""
+            elif event.type == "message_delta":
+                # Capture usage from the message_delta event (end of stream)
+                if hasattr(event, "usage") and event.usage:
+                    output_tokens = getattr(event.usage, "output_tokens", 0)
+                    usage["completion_tokens"] = output_tokens
+            elif event.type == "message_start":
+                # Capture input usage from message_start
+                if hasattr(event, "message") and hasattr(event.message, "usage"):
+                    msg_usage = event.message.usage
+                    usage["prompt_tokens"] = getattr(msg_usage, "input_tokens", 0)
+                    if hasattr(msg_usage, "cache_creation_input_tokens"):
+                        usage["cache_creation_tokens"] = msg_usage.cache_creation_input_tokens
+                    if hasattr(msg_usage, "cache_read_input_tokens"):
+                        usage["cache_read_tokens"] = msg_usage.cache_read_input_tokens
+
+    # Finalize usage
+    prompt_tokens = usage.get("prompt_tokens", 0)
+    completion_tokens = usage.get("completion_tokens", 0)
+    usage["total_tokens"] = prompt_tokens + completion_tokens
+    usage["model"] = model
+
+    text = "".join(text_parts)
+    yield {
+        "type": "done",
+        "text": text,
+        "tool_calls": [tc.model_dump() for tc in tool_calls],
+        "usage": usage,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -998,6 +1271,7 @@ async def chat_completion(
     max_tokens: int = 4096,
     bedrock_config=None,
     local_config=None,
+    max_retries: int = 3,
 ) -> tuple[str, list[ToolCall], dict[str, Any]]:
     """Call an LLM and return (text_response, tool_calls, usage_metadata).
 
@@ -1013,7 +1287,31 @@ async def chat_completion(
        the same endpoint as the ChatGPT web/desktop app (separate quota pool)
     2. Codex Responses API (``chatgpt.com/backend-api/codex/responses``)
     3. OpenAI API key (``api.openai.com/v1/chat/completions``) — per-token billing
+
+    Transient errors (rate limits, timeouts, server errors) are automatically
+    retried with exponential backoff. Permanent errors (auth, invalid request)
+    fail immediately.
     """
+
+    async def _do_completion():
+        return await _chat_completion_inner(
+            model, messages, tools, temperature, max_tokens,
+            bedrock_config=bedrock_config, local_config=local_config,
+        )
+
+    return await _retry_with_backoff(_do_completion, max_retries=max_retries)
+
+
+async def _chat_completion_inner(
+    model: str,
+    messages: list[Message],
+    tools: list[ToolDefinition] | None,
+    temperature: float,
+    max_tokens: int,
+    bedrock_config=None,
+    local_config=None,
+) -> tuple[str, list[ToolCall], dict[str, Any]]:
+    """Inner completion logic without retry wrapper."""
     # Auto-reroute through OpenRouter when direct provider key is missing
     model = _maybe_reroute_model(model)
 
@@ -1043,7 +1341,7 @@ async def chat_completion(
                     model, messages, tools, temperature, max_tokens,
                     oauth_token=oauth_token,
                 )
-                print("[Cadence] Request served via ChatGPT conversation endpoint (tier 1).")
+                logger.info("Request served via ChatGPT conversation endpoint (tier 1).")
                 return result
             except ChatGPTConversationError as e:
                 logger.info(
@@ -1056,7 +1354,7 @@ async def chat_completion(
                     model, messages, tools, temperature, max_tokens,
                     oauth_token=oauth_token,
                 )
-                print("[Cadence] Request served via Codex OAuth endpoint (tier 2).")
+                logger.info("Request served via Codex OAuth endpoint (tier 2).")
                 return result
             except CodexQuotaExhaustedError:
                 logger.info(
@@ -1073,7 +1371,7 @@ async def chat_completion(
                     "wait for your quota to reset or add an OpenAI API key in "
                     "Config > Providers."
                 )
-            print(f"[Cadence] Falling back to OpenAI API key for model {model} (tier 3).")
+            logger.info("Falling back to OpenAI API key for model %s (tier 3).", model)
 
     return await _openai_completion(
         model, messages, tools, temperature, max_tokens,
