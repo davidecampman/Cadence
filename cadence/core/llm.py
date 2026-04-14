@@ -170,7 +170,26 @@ def _messages_to_anthropic(
         # Regular user/assistant message
         content_val: Any = msg.content
         if hasattr(msg, "content_blocks") and msg.content_blocks:
-            content_val = msg.content_blocks
+            # Convert any OpenAI-format image_url blocks to Anthropic image blocks
+            converted: list[dict[str, Any]] = []
+            for block in msg.content_blocks:
+                if block.get("type") == "image_url":
+                    url = block["image_url"]["url"]
+                    if url.startswith("data:"):
+                        media_type, _, data = url[5:].partition(";base64,")
+                        converted.append({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": data,
+                            },
+                        })
+                    else:
+                        converted.append(block)
+                else:
+                    converted.append(block)
+            content_val = converted
         result.append({"role": msg.role.value, "content": content_val})
 
     return system, result
