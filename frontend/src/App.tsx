@@ -93,6 +93,23 @@ function cleanCitations(text: string): string {
   return text;
 }
 
+/** Custom ReactMarkdown components: download links trigger downloads, others open in new tab. */
+const markdownComponents = {
+  a: ({ href, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => {
+    if (href && href.includes('/api/files/download')) {
+      try {
+        const url = new URL(href, window.location.origin);
+        const filePath = url.searchParams.get('path') || '';
+        const fileName = filePath.split('/').pop() || 'download';
+        return <a href={href} download={fileName} {...props}>{children}</a>;
+      } catch {
+        // Fall through to default link behavior
+      }
+    }
+    return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
+  },
+};
+
 /** Render message content, replacing [[FILE:/path]] markers with download/reveal buttons. */
 function renderMessageContent(content: string, role: string = 'user') {
   // Clean citation artifacts from agent responses before rendering
@@ -112,7 +129,7 @@ function renderMessageContent(content: string, role: string = 'user') {
   // If no file markers found, render based on role
   if (parts.length === 1 && typeof parts[0] === 'string') {
     if (role === 'agent') {
-      return <ReactMarkdown>{cleaned}</ReactMarkdown>;
+      return <ReactMarkdown components={markdownComponents}>{cleaned}</ReactMarkdown>;
     }
     return <>{cleaned}</>;
   }
@@ -122,7 +139,7 @@ function renderMessageContent(content: string, role: string = 'user') {
       {parts.map((part, i) => {
         if (typeof part === 'string') {
           if (role === 'agent') {
-            return <ReactMarkdown key={i}>{part}</ReactMarkdown>;
+            return <ReactMarkdown key={i} components={markdownComponents}>{part}</ReactMarkdown>;
           }
           return <span key={i}>{part}</span>;
         }

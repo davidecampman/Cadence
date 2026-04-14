@@ -91,10 +91,8 @@ class TestChatsCRUD:
 
     def test_get_nonexistent_chat(self, client):
         resp = client.get("/api/chats/does-not-exist")
-        # The endpoint returns a tuple (dict, 404) but FastAPI returns 200 with the dict
-        # Based on the code: return {"error": "Chat not found"}, 404
-        # This is a known pattern issue in the codebase
-        assert resp.status_code == 200
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Chat not found"
 
     def test_update_chat_title(self, client):
         client.post("/api/chats", json={"id": "upd-1", "title": "Original"})

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import platform
 import shutil
 import tempfile
@@ -106,12 +107,20 @@ class CodeExecutionTool(Tool):
         # Apply sandboxing
         sandboxed = _wrap_with_sandbox(raw_command, cfg)
 
+        work_dir = tempfile.gettempdir()
+
+        # Snapshot files before execution to detect newly created files
+        try:
+            files_before = set(os.listdir(work_dir))
+        except OSError:
+            files_before = set()
+
         try:
             proc = await asyncio.create_subprocess_shell(
                 sandboxed,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=tempfile.gettempdir(),
+                cwd=work_dir,
             )
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(),
@@ -130,6 +139,17 @@ class CodeExecutionTool(Tool):
             output += f"\n[stderr]\n{err}"
         if proc.returncode != 0:
             output += f"\n[exit code: {proc.returncode}]"
+
+        # Detect newly created files and append [[FILE:]] markers
+        try:
+            files_after = set(os.listdir(work_dir))
+            new_files = files_after - files_before
+            for fname in sorted(new_files):
+                fpath = os.path.join(work_dir, fname)
+                if os.path.isfile(fpath):
+                    output += f"\n[[FILE:{fpath}]]"
+        except OSError:
+            pass
 
         return output.strip() or "(no output)"
 

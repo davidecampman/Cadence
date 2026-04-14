@@ -22,7 +22,7 @@ if hasattr(sys.stderr, "reconfigure"):
 import platform
 import subprocess
 
-from fastapi import FastAPI, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -400,7 +400,7 @@ async def get_single_chat(chat_id: str):
     store = get_chat_store()
     chat = store.get_chat(chat_id)
     if not chat:
-        return {"error": "Chat not found"}, 404
+        raise HTTPException(status_code=404, detail="Chat not found")
     return chat.model_dump()
 
 
@@ -420,7 +420,7 @@ async def update_single_chat(chat_id: str, req: UpdateChatRequest):
     store = get_chat_store()
     chat = store.update_chat(chat_id, title=req.title, session_id=req.session_id)
     if not chat:
-        return {"error": "Chat not found"}, 404
+        raise HTTPException(status_code=404, detail="Chat not found")
     return chat.model_dump()
 
 
@@ -489,12 +489,12 @@ async def upload_skill(file: UploadFile):
     """Upload a skill zip file to install a new skill (or update an existing one)."""
     agent_app = get_app()
     if not file.filename or not file.filename.endswith(".zip"):
-        return {"error": "File must be a .zip archive"}, 400
+        raise HTTPException(status_code=400, detail="File must be a .zip archive")
     data = await file.read()
     try:
         skill = agent_app.skills.install_from_zip(data)
     except ValueError as e:
-        return {"error": str(e)}, 400
+        raise HTTPException(status_code=400, detail=str(e))
     return {
         "status": "installed",
         "skill": {"name": skill.name, "version": skill.version, "description": skill.description},
@@ -507,7 +507,7 @@ async def delete_skill(skill_name: str):
     agent_app = get_app()
     removed = agent_app.skills.uninstall(skill_name)
     if not removed:
-        return {"error": f"Skill '{skill_name}' not found"}, 404
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
     return {"status": "uninstalled", "skill": skill_name}
 
 
@@ -587,7 +587,7 @@ async def post_key(req: ApiKeyRequest):
     """Store an API key for a provider (encrypted at rest)."""
     provider = req.provider.lower()
     if provider not in PROVIDER_ENV_VARS:
-        return {"error": f"Unknown provider: {provider}"}, 400
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
     _save_key(provider, req.api_key)
     # Also inject into the current process so it takes effect immediately
     inject_keys_to_env()
@@ -616,18 +616,18 @@ async def post_bedrock_keys(req: BedrockKeysRequest):
 
     if req.auth_type == "api_key":
         if not req.api_key:
-            return {"error": "api_key is required for auth_type 'api_key'"}, 400
+            raise HTTPException(status_code=400, detail="api_key is required for auth_type 'api_key'")
         _save_key("bedrock_api_key", req.api_key)
         os.environ["BEDROCK_API_KEY"] = req.api_key
     elif req.auth_type == "iam":
         if not req.access_key_id or not req.secret_access_key:
-            return {"error": "access_key_id and secret_access_key are required for auth_type 'iam'"}, 400
+            raise HTTPException(status_code=400, detail="access_key_id and secret_access_key are required for auth_type 'iam'")
         _save_key("bedrock_access_key_id", req.access_key_id)
         _save_key("bedrock_secret_access_key", req.secret_access_key)
         os.environ["AWS_ACCESS_KEY_ID"] = req.access_key_id
         os.environ["AWS_SECRET_ACCESS_KEY"] = req.secret_access_key
     else:
-        return {"error": f"Unknown auth_type: {req.auth_type}"}, 400
+        raise HTTPException(status_code=400, detail=f"Unknown auth_type: {req.auth_type}")
 
     inject_keys_to_env()
 
@@ -926,11 +926,11 @@ async def download_file(path: str = Query(..., description="Absolute path to the
     """Serve a local file as a browser download."""
     p = Path(path).expanduser().resolve()
     if not _is_path_allowed(p):
-        return {"error": "Access denied: path outside allowed directories"}, 403
+        raise HTTPException(status_code=403, detail="Access denied: path outside allowed directories")
     if not p.exists():
-        return {"error": f"File not found: {path}"}, 404
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
     if not p.is_file():
-        return {"error": f"Not a file: {path}"}, 400
+        raise HTTPException(status_code=400, detail=f"Not a file: {path}")
     return FileResponse(
         path=str(p),
         filename=p.name,
@@ -943,7 +943,7 @@ async def reveal_file(path: str = Query(..., description="Path to reveal in file
     """Open the OS file manager to the directory containing the given file."""
     p = Path(path).expanduser().resolve()
     if not _is_path_allowed(p):
-        return {"error": "Access denied: path outside allowed directories"}, 403
+        raise HTTPException(status_code=403, detail="Access denied: path outside allowed directories")
     target = p.parent if p.is_file() else p
     if not target.exists():
         return {"error": f"Directory not found: {target}"}
@@ -1000,15 +1000,15 @@ async def kb_ingest(req: KBIngestRequest):
     stype = req.source_type or detect_source_type(req.source)
     parser = PARSERS.get(stype)
     if not parser:
-        return {"error": f"Unsupported source type: {stype}"}, 400
+        raise HTTPException(status_code=400, detail=f"Unsupported source type: {stype}")
 
     try:
         text, metadata = parser(req.source)
     except Exception as e:
-        return {"error": f"Failed to parse: {e}"}, 400
+        raise HTTPException(status_code=400, detail=f"Failed to parse: {e}")
 
     if not text or not text.strip():
-        return {"error": "No text content extracted"}, 400
+        raise HTTPException(status_code=400, detail="No text content extracted")
 
     doc = await store.ingest(
         title=req.title,
@@ -1040,15 +1040,15 @@ async def kb_ingest_upload(file: UploadFile, title: str = Query("")):
 
     parser = PARSERS.get(stype)
     if not parser:
-        return {"error": f"Unsupported file type: {stype}"}, 400
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {stype}")
 
     try:
         text, metadata = parser(data)
     except Exception as e:
-        return {"error": f"Failed to parse: {e}"}, 400
+        raise HTTPException(status_code=400, detail=f"Failed to parse: {e}")
 
     if not text or not text.strip():
-        return {"error": "No text content extracted from file"}, 400
+        raise HTTPException(status_code=400, detail="No text content extracted from file")
 
     doc = await store.ingest(
         title=doc_title,
@@ -1241,7 +1241,7 @@ async def list_checkpoints(status: str | None = None):
     agent_app = get_app()
     mgr = agent_app.checkpoint_manager
     if not mgr:
-        return {"error": "Checkpoints are disabled"}, 400
+        raise HTTPException(status_code=400, detail="Checkpoints are disabled")
 
     if status == "pending":
         checkpoints = mgr.get_pending()
@@ -1257,11 +1257,11 @@ async def resolve_checkpoint(checkpoint_id: str, req: CheckpointResolveRequest):
     agent_app = get_app()
     mgr = agent_app.checkpoint_manager
     if not mgr:
-        return {"error": "Checkpoints are disabled"}, 400
+        raise HTTPException(status_code=400, detail="Checkpoints are disabled")
 
     cp = mgr.resolve(checkpoint_id, approved=req.approved, response=req.response)
     if not cp:
-        return {"error": "Checkpoint not found or already resolved"}, 404
+        raise HTTPException(status_code=404, detail="Checkpoint not found or already resolved")
     return cp.model_dump()
 
 
@@ -1273,7 +1273,7 @@ async def bus_topics():
     agent_app = get_app()
     bus = agent_app.message_bus
     if not bus:
-        return {"error": "Message bus is disabled"}, 400
+        raise HTTPException(status_code=400, detail="Message bus is disabled")
     return {"topics": bus.topics(), "stats": bus.stats()}
 
 
@@ -1283,7 +1283,7 @@ async def bus_messages(topic: str, limit: int = 20):
     agent_app = get_app()
     bus = agent_app.message_bus
     if not bus:
-        return {"error": "Message bus is disabled"}, 400
+        raise HTTPException(status_code=400, detail="Message bus is disabled")
     messages = bus.peek(topic, limit=limit)
     return [m.model_dump() for m in messages]
 
@@ -1310,7 +1310,7 @@ async def graph_add_entity(req: GraphEntityRequest):
     agent_app = get_app()
     graph = agent_app.knowledge_graph
     if not graph:
-        return {"error": "Knowledge graph is disabled"}, 400
+        raise HTTPException(status_code=400, detail="Knowledge graph is disabled")
     entity = graph.add_entity(
         name=req.name,
         entity_type=req.entity_type,
@@ -1329,7 +1329,7 @@ async def graph_find_entities(
     agent_app = get_app()
     graph = agent_app.knowledge_graph
     if not graph:
-        return {"error": "Knowledge graph is disabled"}, 400
+        raise HTTPException(status_code=400, detail="Knowledge graph is disabled")
     entities = graph.find_entities(name=name, entity_type=entity_type, limit=limit)
     return [e.model_dump() for e in entities]
 
@@ -1340,7 +1340,7 @@ async def graph_add_relation(req: GraphRelationRequest):
     agent_app = get_app()
     graph = agent_app.knowledge_graph
     if not graph:
-        return {"error": "Knowledge graph is disabled"}, 400
+        raise HTTPException(status_code=400, detail="Knowledge graph is disabled")
     rel = graph.add_relationship(
         source_id=req.source_id,
         target_id=req.target_id,
@@ -1349,7 +1349,7 @@ async def graph_add_relation(req: GraphRelationRequest):
         properties=req.properties,
     )
     if not rel:
-        return {"error": "One or both entity IDs not found"}, 404
+        raise HTTPException(status_code=404, detail="One or both entity IDs not found")
     return rel.model_dump()
 
 
@@ -1359,7 +1359,7 @@ async def graph_neighbors(entity_id: str, relation_type: str | None = None):
     agent_app = get_app()
     graph = agent_app.knowledge_graph
     if not graph:
-        return {"error": "Knowledge graph is disabled"}, 400
+        raise HTTPException(status_code=400, detail="Knowledge graph is disabled")
     result = graph.get_neighbors(entity_id, relation_type=relation_type)
     return {
         "entities": [e.model_dump() for e in result.entities],
@@ -1373,7 +1373,7 @@ async def graph_stats():
     agent_app = get_app()
     graph = agent_app.knowledge_graph
     if not graph:
-        return {"error": "Knowledge graph is disabled"}, 400
+        raise HTTPException(status_code=400, detail="Knowledge graph is disabled")
     return graph.stats()
 
 
@@ -1383,7 +1383,7 @@ async def graph_delete_entity(entity_id: str):
     agent_app = get_app()
     graph = agent_app.knowledge_graph
     if not graph:
-        return {"error": "Knowledge graph is disabled"}, 400
+        raise HTTPException(status_code=400, detail="Knowledge graph is disabled")
     ok = graph.delete_entity(entity_id)
     return {"status": "deleted" if ok else "not_found"}
 
@@ -1396,7 +1396,7 @@ async def learning_stats():
     agent_app = get_app()
     store = agent_app.learning_store
     if not store:
-        return {"error": "Learning is disabled"}, 400
+        raise HTTPException(status_code=400, detail="Learning is disabled")
     return store.get_stats()
 
 
@@ -1406,7 +1406,7 @@ async def learning_insights(task_type: str, limit: int = 5):
     agent_app = get_app()
     store = agent_app.learning_store
     if not store:
-        return {"error": "Learning is disabled"}, 400
+        raise HTTPException(status_code=400, detail="Learning is disabled")
     insights = store.get_insights(task_type, limit=limit)
     return [i.model_dump() for i in insights]
 
