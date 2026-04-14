@@ -85,4 +85,8 @@ def _print_step(step: TraceStep) -> None:
     icon = _STEP_ICONS.get(step.step_type, "•")
     agent = step.agent_id[:12]
     preview = step.content[:200].replace("\n", " ")
-    print(f"  {icon} [{agent}] {preview}")
+    try:
+        print(f"  {icon} [{agent}] {preview}")
+    except UnicodeEncodeError:
+        safe = f"  {icon} [{agent}] {preview}".encode("ascii", errors="replace").decode("ascii")
+        print(safe)

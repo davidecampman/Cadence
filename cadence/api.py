@@ -6,10 +6,18 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import tempfile
 import time
 import uuid
 from pathlib import Path
+
+# Ensure stdout/stderr use UTF-8 so emoji in agent output / trace logs don't
+# crash the process on systems where the default codec is 'charmap'.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 import platform
 import subprocess
