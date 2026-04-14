@@ -383,10 +383,14 @@ def _messages_to_responses_api(
             continue
 
         if msg.role == Role.USER:
+            # Use content_blocks if present (multimodal with images)
+            content: Any = msg.content
+            if hasattr(msg, "content_blocks") and msg.content_blocks:
+                content = msg.content_blocks
             input_items.append({
                 "type": "message",
                 "role": "user",
-                "content": msg.content,
+                "content": content,
             })
         elif msg.role == Role.ASSISTANT:
             if msg.tool_calls:
@@ -623,10 +627,32 @@ async def _chatgpt_conversation_completion(
         msg_id = str(uuid.uuid4())
 
         if msg.role == Role.USER:
+            # Check for multimodal content (images)
+            parts: list[Any] = []
+            has_images = False
+            if hasattr(msg, "content_blocks") and msg.content_blocks:
+                for block in msg.content_blocks:
+                    if block.get("type") == "text":
+                        parts.append(block.get("text", ""))
+                    elif block.get("type") == "image_url":
+                        # Extract data URI → ChatGPT multimodal_text format
+                        url = block.get("image_url", {}).get("url", "")
+                        if url.startswith("data:"):
+                            parts.append({
+                                "content_type": "image_asset_pointer",
+                                "asset_pointer": url,
+                            })
+                            has_images = True
+            if not parts:
+                parts = [msg.content]
+
             conv_messages.append({
                 "id": msg_id,
                 "author": {"role": "user"},
-                "content": {"content_type": "text", "parts": [msg.content]},
+                "content": {
+                    "content_type": "multimodal_text" if has_images else "text",
+                    "parts": parts,
+                },
                 "metadata": {
                     "serialization_metadata": {"custom_symbol_offsets": []},
                 },
