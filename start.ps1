@@ -58,10 +58,10 @@ if (-not (Test-Path $VenvDir)) {
 }
 
 # Activate venv
-$activateScript = Join-Path $VenvDir 'Scripts' 'Activate.ps1'
+$activateScript = Join-Path (Join-Path $VenvDir 'Scripts') 'Activate.ps1'
 if (-not (Test-Path $activateScript)) {
     # Linux/macOS venv layout (in case someone runs pwsh on *nix)
-    $activateScript = Join-Path $VenvDir 'bin' 'Activate.ps1'
+    $activateScript = Join-Path (Join-Path $VenvDir 'bin') 'Activate.ps1'
 }
 if (-not (Test-Path $activateScript)) {
     Err "Cannot find venv activation script at $activateScript"
