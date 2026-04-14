@@ -39,19 +39,20 @@ OPENAI_AUTH_URL = "https://auth.openai.com/oauth/authorize"
 OPENAI_TOKEN_URL = "https://auth.openai.com/oauth/token"
 OPENAI_REVOKE_URL = "https://auth.openai.com/oauth/revoke"
 
-# The client ID used by third-party OAuth integrations with OpenAI.
-# This is a public client ID (no client_secret) — standard for PKCE flows.
-OPENAI_CLIENT_ID = "app-cadence-oauth"
+# The public client ID used by OpenAI Codex for PKCE OAuth flows.
+# This is a public client (no client_secret) — standard for PKCE flows.
+# See: https://github.com/openai/codex
+OPENAI_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
-# Default scopes for Codex access
-DEFAULT_SCOPES = "openai.chat openai.responses"
+# Default scopes matching the Codex CLI OAuth flow
+DEFAULT_SCOPES = "openid profile email offline_access"
 
 # Where we persist encrypted OAuth credentials
 _OAUTH_PATH = _DATA_DIR / "chatgpt_oauth.enc"
 
-# Default local callback port (same as the Cadence API server)
+# Default local callback port (same as the Vite dev server)
 DEFAULT_CALLBACK_PORT = 5173
-DEFAULT_CALLBACK_URL = "http://127.0.0.1:5173/oauth/callback"
+DEFAULT_CALLBACK_URL = "http://localhost:5173/auth/callback"
 
 # ---------------------------------------------------------------------------
 # Codex API endpoint (different from the regular OpenAI API)
@@ -160,6 +161,8 @@ def build_authorize_url(
         "state": state,
         "code_challenge": challenge,
         "code_challenge_method": "S256",
+        "id_token_add_organizations": "true",
+        "codex_cli_simplified_flow": "true",
     }
     qs = "&".join(f"{k}={_url_encode(v)}" for k, v in params.items())
     return f"{OPENAI_AUTH_URL}?{qs}"
