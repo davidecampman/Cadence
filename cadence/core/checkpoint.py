@@ -56,6 +56,9 @@ class CheckpointManager:
             return "Operation cancelled by user."
     """
 
+    # Maximum number of resolved checkpoints to retain in memory
+    _MAX_RESOLVED = 200
+
     def __init__(self):
         self._checkpoints: dict[str, Checkpoint] = {}
         self._waiters: dict[str, asyncio.Event] = {}
@@ -120,7 +123,21 @@ class CheckpointManager:
         if event:
             event.set()
 
+        # Evict oldest resolved checkpoints to prevent unbounded memory growth
+        self._evict_resolved()
+
         return checkpoint
+
+    def _evict_resolved(self) -> None:
+        """Remove oldest resolved checkpoints if over the retention limit."""
+        resolved = [
+            cp for cp in self._checkpoints.values()
+            if cp.status != CheckpointStatus.PENDING
+        ]
+        if len(resolved) > self._MAX_RESOLVED:
+            resolved.sort(key=lambda c: c.created_at)
+            for cp in resolved[: len(resolved) - self._MAX_RESOLVED]:
+                self._checkpoints.pop(cp.id, None)
 
     def get_pending(self) -> list[Checkpoint]:
         """Return all pending checkpoints (for UI display)."""

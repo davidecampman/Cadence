@@ -107,7 +107,7 @@ class PromptEvolver:
         if errors:
             error_block = f"\nErrors encountered:\n" + "\n".join(f"- {e}" for e in errors)
 
-        efficiency = 1.0 - (iterations_used / max_iterations)
+        efficiency = 1.0 - (iterations_used / max(max_iterations, 1))
         performance_score = max(0.0, min(1.0, efficiency))
 
         # Get existing modifications for context
@@ -186,7 +186,7 @@ class PromptEvolver:
         performance_score: float,
     ) -> list[PromptModification]:
         """Parse LLM output into PromptModification objects."""
-        json_match = re.search(r"\[.*\]", text, re.DOTALL)
+        json_match = re.search(r"\[.*?\]", text, re.DOTALL)
         if not json_match:
             return []
 

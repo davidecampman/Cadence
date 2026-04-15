@@ -9,6 +9,15 @@ from pathlib import Path
 from cadence.core.types import PermissionTier
 from cadence.tools.base import Tool
 
+# Sensitive paths that file-modifying tools should never write to.
+_SENSITIVE_PATHS = {"/etc", "/usr", "/bin", "/sbin", "/boot", "/var", "/root", "/proc", "/sys"}
+
+
+def _is_write_safe(p: Path) -> bool:
+    """Return True if *p* is not inside a sensitive system directory."""
+    resolved = str(p.resolve())
+    return not any(resolved == s or resolved.startswith(s + "/") for s in _SENSITIVE_PATHS)
+
 
 class RegexReplaceTool(Tool):
     name = "regex_replace"
@@ -43,6 +52,8 @@ class RegexReplaceTool(Tool):
         p = Path(path).expanduser()
         if not p.exists():
             return f"File not found: {path}"
+        if not _is_write_safe(p):
+            return f"Cannot write to protected path: {path}"
 
         text = p.read_text(errors="replace")
 
@@ -126,6 +137,8 @@ class DiffPatchTool(Tool):
             target = Path(original).expanduser()
             if not target.exists():
                 return f"File not found: {original}"
+            if not _is_write_safe(target):
+                return f"Cannot write to protected path: {original}"
 
             lines = target.read_text(errors="replace").splitlines(keepends=True)
             # Parse unified diff and apply

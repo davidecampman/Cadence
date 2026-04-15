@@ -38,7 +38,8 @@ async def async_main(config_path: str | None = None):
 
     while True:
         try:
-            user_input = input("you > ").strip()
+            loop = asyncio.get_running_loop()
+            user_input = (await loop.run_in_executor(None, input, "you > ")).strip()
         except (EOFError, KeyboardInterrupt):
             print("\nGoodbye.")
             break

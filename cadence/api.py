@@ -25,7 +25,7 @@ import subprocess
 from fastapi import FastAPI, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -475,7 +475,7 @@ async def get_single_chat(chat_id: str):
     store = get_chat_store()
     chat = store.get_chat(chat_id)
     if not chat:
-        return {"error": "Chat not found"}, 404
+        return JSONResponse({"error": "Chat not found"}, status_code=404)
     return chat.model_dump()
 
 
@@ -495,7 +495,7 @@ async def update_single_chat(chat_id: str, req: UpdateChatRequest):
     store = get_chat_store()
     chat = store.update_chat(chat_id, title=req.title, session_id=req.session_id)
     if not chat:
-        return {"error": "Chat not found"}, 404
+        return JSONResponse({"error": "Chat not found"}, status_code=404)
     return chat.model_dump()
 
 
@@ -567,15 +567,15 @@ async def upload_skill(file: UploadFile):
     """Upload a skill zip file to install a new skill (or update an existing one)."""
     agent_app = get_app()
     if not file.filename or not file.filename.endswith(".zip"):
-        return {"error": "File must be a .zip archive"}, 400
+        return JSONResponse({"error": "File must be a .zip archive"}, status_code=400)
     # Read with size limit to prevent OOM on large uploads
     data = await file.read(_MAX_SKILL_UPLOAD_BYTES + 1)
     if len(data) > _MAX_SKILL_UPLOAD_BYTES:
-        return {"error": f"File too large (max {_MAX_SKILL_UPLOAD_BYTES // 1024 // 1024} MB)"}, 400
+        return JSONResponse({"error": f"File too large (max {_MAX_SKILL_UPLOAD_BYTES // 1024 // 1024} MB)"}, status_code=400)
     try:
         skill = agent_app.skills.install_from_zip(data)
     except ValueError as e:
-        return {"error": str(e)}, 400
+        return JSONResponse({"error": str(e)}, status_code=400)
     return {
         "status": "installed",
         "skill": {"name": skill.name, "version": skill.version, "description": skill.description},
@@ -588,7 +588,7 @@ async def delete_skill(skill_name: str):
     agent_app = get_app()
     removed = agent_app.skills.uninstall(skill_name)
     if not removed:
-        return {"error": f"Skill '{skill_name}' not found"}, 404
+        return JSONResponse({"error": f"Skill '{skill_name}' not found"}, status_code=404)
     return {"status": "uninstalled", "skill": skill_name}
 
 
@@ -668,7 +668,7 @@ async def post_key(req: ApiKeyRequest):
     """Store an API key for a provider (encrypted at rest)."""
     provider = req.provider.lower()
     if provider not in PROVIDER_ENV_VARS:
-        return {"error": f"Unknown provider: {provider}"}, 400
+        return JSONResponse({"error": f"Unknown provider: {provider}"}, status_code=400)
     _save_key(provider, req.api_key)
     # Also inject into the current process so it takes effect immediately
     inject_keys_to_env()
@@ -697,18 +697,18 @@ async def post_bedrock_keys(req: BedrockKeysRequest):
 
     if req.auth_type == "api_key":
         if not req.api_key:
-            return {"error": "api_key is required for auth_type 'api_key'"}, 400
+            return JSONResponse({"error": "api_key is required for auth_type 'api_key'"}, status_code=400)
         _save_key("bedrock_api_key", req.api_key)
         os.environ["BEDROCK_API_KEY"] = req.api_key
     elif req.auth_type == "iam":
         if not req.access_key_id or not req.secret_access_key:
-            return {"error": "access_key_id and secret_access_key are required for auth_type 'iam'"}, 400
+            return JSONResponse({"error": "access_key_id and secret_access_key are required for auth_type 'iam'"}, status_code=400)
         _save_key("bedrock_access_key_id", req.access_key_id)
         _save_key("bedrock_secret_access_key", req.secret_access_key)
         os.environ["AWS_ACCESS_KEY_ID"] = req.access_key_id
         os.environ["AWS_SECRET_ACCESS_KEY"] = req.secret_access_key
     else:
-        return {"error": f"Unknown auth_type: {req.auth_type}"}, 400
+        return JSONResponse({"error": f"Unknown auth_type: {req.auth_type}"}, status_code=400)
 
     inject_keys_to_env()
 
@@ -1007,11 +1007,11 @@ async def download_file(path: str = Query(..., description="Absolute path to the
     """Serve a local file as a browser download."""
     p = Path(path).expanduser().resolve()
     if not _is_path_allowed(p):
-        return {"error": "Access denied: path outside allowed directories"}, 403
+        return JSONResponse({"error": "Access denied: path outside allowed directories"}, status_code=403)
     if not p.exists():
-        return {"error": f"File not found: {path}"}, 404
+        return JSONResponse({"error": f"File not found: {path}"}, status_code=404)
     if not p.is_file():
-        return {"error": f"Not a file: {path}"}, 400
+        return JSONResponse({"error": f"Not a file: {path}"}, status_code=400)
     return FileResponse(
         path=str(p),
         filename=p.name,
@@ -1024,7 +1024,7 @@ async def reveal_file(path: str = Query(..., description="Path to reveal in file
     """Open the OS file manager to the directory containing the given file."""
     p = Path(path).expanduser().resolve()
     if not _is_path_allowed(p):
-        return {"error": "Access denied: path outside allowed directories"}, 403
+        return JSONResponse({"error": "Access denied: path outside allowed directories"}, status_code=403)
     target = p.parent if p.is_file() else p
     if not target.exists():
         return {"error": f"Directory not found: {target}"}
@@ -1081,15 +1081,15 @@ async def kb_ingest(req: KBIngestRequest):
     stype = req.source_type or detect_source_type(req.source)
     parser = PARSERS.get(stype)
     if not parser:
-        return {"error": f"Unsupported source type: {stype}"}, 400
+        return JSONResponse({"error": f"Unsupported source type: {stype}"}, status_code=400)
 
     try:
         text, metadata = parser(req.source)
     except Exception as e:
-        return {"error": f"Failed to parse: {e}"}, 400
+        return JSONResponse({"error": f"Failed to parse: {e}"}, status_code=400)
 
     if not text or not text.strip():
-        return {"error": "No text content extracted"}, 400
+        return JSONResponse({"error": "No text content extracted"}, status_code=400)
 
     doc = await store.ingest(
         title=req.title,
@@ -1121,15 +1121,15 @@ async def kb_ingest_upload(file: UploadFile, title: str = Query("")):
 
     parser = PARSERS.get(stype)
     if not parser:
-        return {"error": f"Unsupported file type: {stype}"}, 400
+        return JSONResponse({"error": f"Unsupported file type: {stype}"}, status_code=400)
 
     try:
         text, metadata = parser(data)
     except Exception as e:
-        return {"error": f"Failed to parse: {e}"}, 400
+        return JSONResponse({"error": f"Failed to parse: {e}"}, status_code=400)
 
     if not text or not text.strip():
-        return {"error": "No text content extracted from file"}, 400
+        return JSONResponse({"error": "No text content extracted from file"}, status_code=400)
 
     doc = await store.ingest(
         title=doc_title,
@@ -1264,28 +1264,40 @@ async def chat_stream(req: ChatRequest):
     task = asyncio.create_task(_run_and_collect())
     _running_tasks[session_id] = task
 
-    # Patch the trace logger to emit thinking/status events in real-time
-    original_log = agent_app.trace.log
+    # Add a per-request streaming hook rather than monkey-patching the global
+    # trace logger (which races when multiple streams are active concurrently).
+    _base_log = agent_app.trace._base_log if hasattr(agent_app.trace, "_base_log") else agent_app.trace.log
+    agent_app.trace._base_log = _base_log  # preserve the original
 
-    def _streaming_log(step):
-        original_log(step)
-        try:
-            loop = asyncio.get_running_loop()
-            if step.step_type == "thought":
-                loop.create_task(collector.emit_thinking(step.content, step.agent_id))
-            elif step.step_type == "action":
-                loop.create_task(collector.emit_status(step.content, step.agent_id))
-        except RuntimeError:
-            pass
+    # Use a list of active stream collectors instead of overwriting the log method
+    if not hasattr(agent_app.trace, "_stream_collectors"):
+        agent_app.trace._stream_collectors = []
 
-    agent_app.trace.log = _streaming_log
+        def _multiplexing_log(step):
+            _base_log(step)
+            for coll in list(agent_app.trace._stream_collectors):
+                try:
+                    loop = asyncio.get_running_loop()
+                    if step.step_type == "thought":
+                        loop.create_task(coll.emit_thinking(step.content, step.agent_id))
+                    elif step.step_type == "action":
+                        loop.create_task(coll.emit_status(step.content, step.agent_id))
+                except RuntimeError:
+                    pass
+
+        agent_app.trace.log = _multiplexing_log
+
+    agent_app.trace._stream_collectors.append(collector)
 
     async def _event_generator():
         try:
             async for event in collector:
                 yield event.to_sse()
         finally:
-            agent_app.trace.log = original_log
+            try:
+                agent_app.trace._stream_collectors.remove(collector)
+            except ValueError:
+                pass
 
     return StreamingResponse(
         _event_generator(),
@@ -1322,7 +1334,7 @@ async def list_checkpoints(status: str | None = None):
     agent_app = get_app()
     mgr = agent_app.checkpoint_manager
     if not mgr:
-        return {"error": "Checkpoints are disabled"}, 400
+        return JSONResponse({"error": "Checkpoints are disabled"}, status_code=400)
 
     if status == "pending":
         checkpoints = mgr.get_pending()
@@ -1338,11 +1350,11 @@ async def resolve_checkpoint(checkpoint_id: str, req: CheckpointResolveRequest):
     agent_app = get_app()
     mgr = agent_app.checkpoint_manager
     if not mgr:
-        return {"error": "Checkpoints are disabled"}, 400
+        return JSONResponse({"error": "Checkpoints are disabled"}, status_code=400)
 
     cp = mgr.resolve(checkpoint_id, approved=req.approved, response=req.response)
     if not cp:
-        return {"error": "Checkpoint not found or already resolved"}, 404
+        return JSONResponse({"error": "Checkpoint not found or already resolved"}, status_code=404)
     return cp.model_dump()
 
 
@@ -1354,7 +1366,7 @@ async def bus_topics():
     agent_app = get_app()
     bus = agent_app.message_bus
     if not bus:
-        return {"error": "Message bus is disabled"}, 400
+        return JSONResponse({"error": "Message bus is disabled"}, status_code=400)
     return {"topics": bus.topics(), "stats": bus.stats()}
 
 
@@ -1364,7 +1376,7 @@ async def bus_messages(topic: str, limit: int = 20):
     agent_app = get_app()
     bus = agent_app.message_bus
     if not bus:
-        return {"error": "Message bus is disabled"}, 400
+        return JSONResponse({"error": "Message bus is disabled"}, status_code=400)
     messages = bus.peek(topic, limit=limit)
     return [m.model_dump() for m in messages]
 
@@ -1391,7 +1403,7 @@ async def graph_add_entity(req: GraphEntityRequest):
     agent_app = get_app()
     graph = agent_app.knowledge_graph
     if not graph:
-        return {"error": "Knowledge graph is disabled"}, 400
+        return JSONResponse({"error": "Knowledge graph is disabled"}, status_code=400)
     entity = graph.add_entity(
         name=req.name,
         entity_type=req.entity_type,
@@ -1410,7 +1422,7 @@ async def graph_find_entities(
     agent_app = get_app()
     graph = agent_app.knowledge_graph
     if not graph:
-        return {"error": "Knowledge graph is disabled"}, 400
+        return JSONResponse({"error": "Knowledge graph is disabled"}, status_code=400)
     entities = graph.find_entities(name=name, entity_type=entity_type, limit=limit)
     return [e.model_dump() for e in entities]
 
@@ -1421,7 +1433,7 @@ async def graph_add_relation(req: GraphRelationRequest):
     agent_app = get_app()
     graph = agent_app.knowledge_graph
     if not graph:
-        return {"error": "Knowledge graph is disabled"}, 400
+        return JSONResponse({"error": "Knowledge graph is disabled"}, status_code=400)
     rel = graph.add_relationship(
         source_id=req.source_id,
         target_id=req.target_id,
@@ -1430,7 +1442,7 @@ async def graph_add_relation(req: GraphRelationRequest):
         properties=req.properties,
     )
     if not rel:
-        return {"error": "One or both entity IDs not found"}, 404
+        return JSONResponse({"error": "One or both entity IDs not found"}, status_code=404)
     return rel.model_dump()
 
 
@@ -1440,7 +1452,7 @@ async def graph_neighbors(entity_id: str, relation_type: str | None = None):
     agent_app = get_app()
     graph = agent_app.knowledge_graph
     if not graph:
-        return {"error": "Knowledge graph is disabled"}, 400
+        return JSONResponse({"error": "Knowledge graph is disabled"}, status_code=400)
     result = graph.get_neighbors(entity_id, relation_type=relation_type)
     return {
         "entities": [e.model_dump() for e in result.entities],
@@ -1454,7 +1466,7 @@ async def graph_stats():
     agent_app = get_app()
     graph = agent_app.knowledge_graph
     if not graph:
-        return {"error": "Knowledge graph is disabled"}, 400
+        return JSONResponse({"error": "Knowledge graph is disabled"}, status_code=400)
     return graph.stats()
 
 
@@ -1464,7 +1476,7 @@ async def graph_delete_entity(entity_id: str):
     agent_app = get_app()
     graph = agent_app.knowledge_graph
     if not graph:
-        return {"error": "Knowledge graph is disabled"}, 400
+        return JSONResponse({"error": "Knowledge graph is disabled"}, status_code=400)
     ok = graph.delete_entity(entity_id)
     return {"status": "deleted" if ok else "not_found"}
 
@@ -1477,7 +1489,7 @@ async def learning_stats():
     agent_app = get_app()
     store = agent_app.learning_store
     if not store:
-        return {"error": "Learning is disabled"}, 400
+        return JSONResponse({"error": "Learning is disabled"}, status_code=400)
     return store.get_stats()
 
 
@@ -1487,7 +1499,7 @@ async def learning_insights(task_type: str, limit: int = 5):
     agent_app = get_app()
     store = agent_app.learning_store
     if not store:
-        return {"error": "Learning is disabled"}, 400
+        return JSONResponse({"error": "Learning is disabled"}, status_code=400)
     insights = store.get_insights(task_type, limit=limit)
     return [i.model_dump() for i in insights]
 
@@ -1507,7 +1519,9 @@ async def websocket_endpoint(ws: WebSocket):
             data = await ws.receive_text()
             if data == "ping":
                 await ws.send_text(json.dumps({"type": "pong"}))
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, Exception):
+        pass
+    finally:
         _remove_ws_client(cid)
 
 

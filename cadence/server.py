@@ -8,7 +8,7 @@ import sys
 def main():
     import uvicorn
 
-    host = "0.0.0.0"
+    host = "127.0.0.1"
     port = 8000
 
     # Simple arg parsing
@@ -16,8 +16,12 @@ def main():
     for i, arg in enumerate(args):
         if arg in ("--host",) and i + 1 < len(args):
             host = args[i + 1]
-        if arg in ("--port", "-p") and i + 1 < len(args):
-            port = int(args[i + 1])
+        elif arg in ("--port", "-p") and i + 1 < len(args):
+            try:
+                port = int(args[i + 1])
+            except ValueError:
+                print(f"Error: invalid port number: {args[i + 1]}")
+                sys.exit(1)
 
     print(f"\n  Cadence API server starting on http://{host}:{port}")
     print(f"  Frontend: http://localhost:{port}\n")

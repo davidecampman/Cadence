@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
+import shlex
 from pathlib import Path
 
 from cadence.core.types import PermissionTier
@@ -41,23 +42,26 @@ class ScreenshotTool(Tool):
 
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-        # Try common screenshot tools in order
-        for cmd in [
-            f"import -window root {output_path}",       # ImageMagick
-            f"scrot {output_path}",                       # scrot
-            f"gnome-screenshot -f {output_path}",         # GNOME
-            f"screencapture {output_path}",               # macOS
-        ]:
-            tool_name = cmd.split()[0]
-            proc = await asyncio.create_subprocess_shell(
-                f"which {tool_name}",
+        # Try common screenshot tools in order, using exec (not shell) to
+        # prevent command injection via the output_path argument.
+        safe_path = str(Path(output_path).resolve())
+        tool_cmds = [
+            ["import", "-window", "root", safe_path],   # ImageMagick
+            ["scrot", safe_path],                         # scrot
+            ["gnome-screenshot", "-f", safe_path],        # GNOME
+            ["screencapture", safe_path],                 # macOS
+        ]
+        for cmd_args in tool_cmds:
+            tool_name = cmd_args[0]
+            proc = await asyncio.create_subprocess_exec(
+                "which", tool_name,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             await proc.communicate()
             if proc.returncode == 0:
-                proc = await asyncio.create_subprocess_shell(
-                    cmd,
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd_args,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
@@ -121,5 +125,5 @@ class ImageDescribeTool(Tool):
         return (
             f"Image: {p.name} ({size_mb:.2f}MB, {mime})\n"
             f"Base64 length: {len(b64)} chars\n"
-            f"data:{mime};base64,{b64[:200]}... (use full base64 for vision model)"
+            f"data:{mime};base64,{b64}"
         )

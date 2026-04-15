@@ -287,8 +287,12 @@ class CollaborationEngine:
 
             contributions.append({"role": "reviewer", "round": str(round_num), "content": rev_result})
 
-            # Check if approved
-            if "APPROVED" in rev_result.upper():
+            # Check if approved — use word-boundary aware match to avoid
+            # false positives like "NOT APPROVED" or "UNAPPROVED"
+            import re as _re
+            _is_approved = bool(_re.search(r'\bAPPROVED\b', rev_result.upper())) and \
+                           not bool(_re.search(r'\bNOT\s+APPROVED\b', rev_result.upper()))
+            if _is_approved:
                 self.trace.result(
                     "collaboration",
                     f"Peer review APPROVED at round {round_num}",

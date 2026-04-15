@@ -11,10 +11,13 @@ so it can be imported early in the startup sequence.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 
 from cryptography.fernet import Fernet
+
+logger = logging.getLogger(__name__)
 
 _DATA_DIR = Path(os.environ.get("CADENCE_DATA_DIR", "./data"))
 _MASTER_KEY_PATH = _DATA_DIR / ".keystore_key"
@@ -72,7 +75,8 @@ def _load_store() -> dict[str, str]:
         encrypted = _KEYS_PATH.read_bytes()
         decrypted = cipher.decrypt(encrypted)
         return json.loads(decrypted)
-    except Exception:
+    except Exception as e:
+        logger.warning("Failed to decrypt key store (keys may be lost if master key changed): %s", e)
         return {}
 
 

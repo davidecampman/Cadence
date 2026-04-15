@@ -15,27 +15,29 @@ logger = logging.getLogger(__name__)
 # Lazy-loaded browser instance shared across tool calls within a session.
 _browser = None
 _playwright = None
+_browser_lock = asyncio.Lock()
 
 
 async def _get_browser():
     """Lazily start Playwright and return a shared browser instance."""
     global _browser, _playwright
-    if _browser is not None:
-        return _browser
+    async with _browser_lock:
+        if _browser is not None:
+            return _browser
 
-    try:
-        from playwright.async_api import async_playwright
-    except ImportError:
-        raise RuntimeError(
-            "playwright is not installed. Run: pip install playwright && playwright install chromium"
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            raise RuntimeError(
+                "playwright is not installed. Run: pip install playwright && playwright install chromium"
+            )
+
+        _playwright = await async_playwright().start()
+        _browser = await _playwright.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
         )
-
-    _playwright = await async_playwright().start()
-    _browser = await _playwright.chromium.launch(
-        headless=True,
-        args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
-    )
-    return _browser
+        return _browser
 
 
 async def _shutdown_browser():

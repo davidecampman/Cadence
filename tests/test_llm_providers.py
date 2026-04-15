@@ -15,6 +15,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from cadence.core.types import Message, Role, ToolCall, ToolDefinition
+
+
+def _make_async_cm_mock(mock_client):
+    """Make a mock client instance work as an async context manager.
+
+    When code does `async with openai.AsyncOpenAI(...) as client:`,
+    the constructor returns an object whose __aenter__ returns self.
+    """
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    return mock_client
+
+
 from cadence.core.llm import (
     _extract_tool_calls_from_text,
     _get_provider,
@@ -254,6 +267,7 @@ class TestChatCompletionOpenAI:
         mock_create = AsyncMock(return_value=_mock_openai_response("The answer is 42."))
 
         with patch("cadence.core.llm.openai.AsyncOpenAI") as MockClient:
+            _make_async_cm_mock(MockClient.return_value)
             MockClient.return_value.chat.completions.create = mock_create
 
             text, tool_calls, usage = await chat_completion(
@@ -286,6 +300,7 @@ class TestChatCompletionOpenAI:
         tools = [ToolDefinition(name="search", description="Search", parameters={"type": "object"})]
 
         with patch("cadence.core.llm.openai.AsyncOpenAI") as MockClient:
+            _make_async_cm_mock(MockClient.return_value)
             MockClient.return_value.chat.completions.create = mock_create
 
             text, tool_calls, usage = await chat_completion(
@@ -308,6 +323,7 @@ class TestChatCompletionOpenAI:
         mock_create = AsyncMock(return_value=_mock_openai_response("Done"))
 
         with patch("cadence.core.llm.openai.AsyncOpenAI") as MockClient:
+            _make_async_cm_mock(MockClient.return_value)
             MockClient.return_value.chat.completions.create = mock_create
 
             text, _, _ = await chat_completion(
@@ -348,6 +364,7 @@ class TestChatCompletionAnthropic:
 
         with patch("cadence.core.llm.anthropic.AsyncAnthropic") as MockClient:
             MockClient.return_value.messages.create = mock_create
+            MockClient.return_value.close = AsyncMock()
 
             text, tool_calls, usage = await chat_completion(
                 model="claude-sonnet-4-5-20250514",
@@ -373,6 +390,7 @@ class TestChatCompletionAnthropic:
 
         with patch("cadence.core.llm.anthropic.AsyncAnthropic") as MockClient:
             MockClient.return_value.messages.create = mock_create
+            MockClient.return_value.close = AsyncMock()
 
             text, tool_calls, usage = await chat_completion(
                 model="claude-sonnet-4-5-20250514",
@@ -399,6 +417,7 @@ class TestChatCompletionAnthropic:
 
         with patch("cadence.core.llm.anthropic.AsyncAnthropic") as MockClient:
             MockClient.return_value.messages.create = mock_create
+            MockClient.return_value.close = AsyncMock()
 
             text, tool_calls, _ = await chat_completion(
                 model="claude-sonnet-4-5-20250514",
@@ -424,6 +443,7 @@ class TestChatCompletionBedrock:
 
         with patch("cadence.core.llm.anthropic.AsyncAnthropicBedrock") as MockClient:
             MockClient.return_value.messages.create = mock_create
+            MockClient.return_value.close = AsyncMock()
 
             text, _, usage = await chat_completion(
                 model="bedrock/converse/us.anthropic.claude-sonnet-4-5-20250514-v1:0",
@@ -455,6 +475,7 @@ class TestChatCompletionBedrock:
 
         with patch("cadence.core.llm.anthropic.AsyncAnthropicBedrock") as MockClient:
             MockClient.return_value.messages.create = mock_create
+            MockClient.return_value.close = AsyncMock()
 
             text, _, _ = await chat_completion(
                 model="claude-sonnet-4-5-20250514",
@@ -475,6 +496,7 @@ class TestChatCompletionBedrock:
 
         with patch("cadence.core.llm.anthropic.AsyncAnthropicBedrock") as MockClient:
             MockClient.return_value.messages.create = mock_create
+            MockClient.return_value.close = AsyncMock()
 
             await chat_completion(
                 model="bedrock/converse/us.anthropic.claude-3-haiku-20240307-v1:0",
@@ -537,6 +559,7 @@ class TestLocalModelProvider:
         mock_create = AsyncMock(return_value=mock_response)
 
         with patch("cadence.core.llm.openai.AsyncOpenAI") as MockClient:
+            _make_async_cm_mock(MockClient.return_value)
             MockClient.return_value.chat.completions.create = mock_create
 
             text, tool_calls, usage = await chat_completion(

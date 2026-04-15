@@ -46,8 +46,10 @@ def supports_vision(model: str) -> bool:
     return any(stripped.startswith(p) for p in _VISION_MODEL_PREFIXES)
 
 
-class ImageInput(BaseModel if False else object):
+class ImageInput:
     """Represents an image input that can be sent to vision-capable models."""
+
+    __slots__ = ("data", "media_type", "source")
 
     def __init__(
         self,

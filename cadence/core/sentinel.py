@@ -281,12 +281,12 @@ async def get_sentinel_headers(
         difficulty = pow_data.get("difficulty", "")
         if seed and difficulty:
             # Run CPU-bound PoW solver in a thread pool so the event loop stays free
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             proof = await loop.run_in_executor(
                 None, generate_proof_token, seed, difficulty, ua
             )
             result["openai-sentinel-proof-token"] = proof
-            print(f"[Cadence] Sentinel PoW solved (difficulty={difficulty[:8]}...)")
+            logger.info("Sentinel PoW solved (difficulty=%s...)", difficulty[:8])
         else:
             result["openai-sentinel-proof-token"] = generate_fake_proof_token(ua)
     elif not requirements:

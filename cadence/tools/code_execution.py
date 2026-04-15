@@ -6,7 +6,6 @@ import asyncio
 import os
 import platform
 import shutil
-import signal
 import tempfile
 import time
 
@@ -183,7 +182,7 @@ class CodeExecutionTool(Tool):
         if not interpreter:
             return f"Unsupported language: {language}"
 
-        effective_timeout = timeout or cfg.timeout_seconds
+        effective_timeout = timeout if timeout is not None else cfg.timeout_seconds
 
         # Build the raw command
         raw_command = f"{interpreter} {_shell_quote(code)}"
@@ -259,7 +258,7 @@ class ShellTool(Tool):
         if blocked:
             raise PermissionError(f"Blocked: command matches dangerous pattern '{blocked}'")
 
-        effective_timeout = timeout or cfg.timeout_seconds
+        effective_timeout = timeout if timeout is not None else cfg.timeout_seconds
 
         # Apply sandboxing
         sandboxed = _wrap_with_sandbox(command, cfg)
