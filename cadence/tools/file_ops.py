@@ -1,12 +1,14 @@
-"""File operation tools — read, write, list, search, grep, edit, diff."""
+"""File operation tools — read, write, list, search, grep, edit, diff, zip."""
 
 from __future__ import annotations
 
 import base64
 import difflib
 import glob as glob_mod
+import io
 import os
 import re
+import zipfile
 from pathlib import Path
 
 from cadence.core.types import PermissionTier
@@ -114,6 +116,74 @@ class WriteBinaryFileTool(Tool):
         abs_path = str(p.resolve())
         return (
             f"Wrote {len(data)} bytes (binary) to {path}\n"
+            f"[[FILE:{abs_path}]]"
+        )
+
+
+class CreateZipTool(Tool):
+    name = "create_zip"
+    description = (
+        "Create a ZIP archive containing one or more files. "
+        "Each entry specifies a filename and its text content. "
+        "The resulting ZIP is written to the given output path and a download "
+        "link is returned. Use this whenever a user asks for a ZIP, archive, "
+        "or downloadable bundle."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "output_path": {
+                "type": "string",
+                "description": "Path where the ZIP file will be written (e.g., '/tmp/project.zip').",
+            },
+            "files": {
+                "type": "array",
+                "description": "List of files to include in the archive.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "File name inside the archive (e.g., 'hello.py' or 'src/main.py').",
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "Text content of the file.",
+                        },
+                    },
+                    "required": ["name", "content"],
+                },
+            },
+        },
+        "required": ["output_path", "files"],
+    }
+    permission_tier = PermissionTier.STANDARD
+
+    async def execute(self, output_path: str, files: list[dict]) -> str:
+        p = Path(output_path).expanduser()
+        if not _is_write_safe(p):
+            return f"Write blocked: path resolves inside a protected system directory ({p.resolve()})"
+        if not files:
+            return "Error: no files provided for the archive."
+
+        p.parent.mkdir(parents=True, exist_ok=True)
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for entry in files:
+                name = entry.get("name", "")
+                content = entry.get("content", "")
+                if not name:
+                    continue
+                zf.writestr(name, content)
+
+        data = buf.getvalue()
+        p.write_bytes(data)
+        abs_path = str(p.resolve())
+        entry_count = len([e for e in files if e.get("name")])
+        return (
+            f"Created ZIP archive with {entry_count} file(s) "
+            f"({len(data):,} bytes) at {output_path}\n"
             f"[[FILE:{abs_path}]]"
         )
 

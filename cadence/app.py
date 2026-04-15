@@ -26,7 +26,7 @@ from cadence.tools.code_execution import CodeExecutionTool, ShellTool
 from cadence.tools.database import SqlQueryTool
 from cadence.tools.delegate import DelegateTool
 from cadence.tools.environment import CheckDependencyTool, EnvInfoTool, InstallPackageTool
-from cadence.tools.file_ops import ApplyDiffTool, EditFileTool, FileDiffTool, GrepTool, ListFilesTool, ReadFileTool, SearchFilesTool, WriteBinaryFileTool, WriteFileTool
+from cadence.tools.file_ops import ApplyDiffTool, CreateZipTool, EditFileTool, FileDiffTool, GrepTool, ListFilesTool, ReadFileTool, SearchFilesTool, WriteBinaryFileTool, WriteFileTool
 from cadence.tools.git_ops import GitCommitTool, GitDiffTool, GitLogTool, GitStatusTool
 from cadence.tools.graph_tools import GraphAddEntityTool, GraphAddRelationTool, GraphQueryTool
 from cadence.tools.http_client import HttpRequestTool
@@ -124,6 +124,7 @@ class CadenceApp:
         registry.register(ReadFileTool())
         registry.register(WriteFileTool())
         registry.register(WriteBinaryFileTool())
+        registry.register(CreateZipTool())
         registry.register(EditFileTool())
         registry.register(ApplyDiffTool())
         registry.register(FileDiffTool())

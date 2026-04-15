@@ -8,6 +8,7 @@ import pytest
 
 from cadence.core.types import PermissionTier
 from cadence.tools.file_ops import (
+    CreateZipTool,
     ListFilesTool,
     ReadFileTool,
     SearchFilesTool,
@@ -123,6 +124,100 @@ class TestWriteFileTool:
         tool = WriteFileTool()
         await tool.run("w5", {"path": str(target), "content": "replaced"})
         assert target.read_text() == "replaced"
+
+
+class TestCreateZipTool:
+    @pytest.mark.asyncio
+    async def test_create_zip_single_file(self, tmp_path):
+        import zipfile
+
+        target = tmp_path / "output.zip"
+        tool = CreateZipTool()
+        result = await tool.run("z1", {
+            "output_path": str(target),
+            "files": [{"name": "hello.py", "content": 'print("Hello, World!")'}],
+        })
+        assert result.success
+        assert "1 file(s)" in result.output
+        assert "[[FILE:" in result.output
+        assert target.exists()
+
+        with zipfile.ZipFile(target) as zf:
+            assert zf.namelist() == ["hello.py"]
+            assert zf.read("hello.py").decode() == 'print("Hello, World!")'
+
+    @pytest.mark.asyncio
+    async def test_create_zip_multiple_files(self, tmp_path):
+        import zipfile
+
+        target = tmp_path / "bundle.zip"
+        tool = CreateZipTool()
+        result = await tool.run("z2", {
+            "output_path": str(target),
+            "files": [
+                {"name": "main.py", "content": "import utils"},
+                {"name": "utils.py", "content": "def helper(): pass"},
+                {"name": "README.md", "content": "# My Project"},
+            ],
+        })
+        assert result.success
+        assert "3 file(s)" in result.output
+
+        with zipfile.ZipFile(target) as zf:
+            assert len(zf.namelist()) == 3
+            assert "main.py" in zf.namelist()
+            assert "utils.py" in zf.namelist()
+            assert "README.md" in zf.namelist()
+
+    @pytest.mark.asyncio
+    async def test_create_zip_nested_paths(self, tmp_path):
+        import zipfile
+
+        target = tmp_path / "nested.zip"
+        tool = CreateZipTool()
+        result = await tool.run("z3", {
+            "output_path": str(target),
+            "files": [
+                {"name": "src/main.py", "content": "main code"},
+                {"name": "src/lib/utils.py", "content": "utils code"},
+            ],
+        })
+        assert result.success
+        with zipfile.ZipFile(target) as zf:
+            assert "src/main.py" in zf.namelist()
+            assert "src/lib/utils.py" in zf.namelist()
+
+    @pytest.mark.asyncio
+    async def test_create_zip_empty_files_list(self, tmp_path):
+        target = tmp_path / "empty.zip"
+        tool = CreateZipTool()
+        result = await tool.run("z4", {
+            "output_path": str(target),
+            "files": [],
+        })
+        assert result.success
+        assert "no files" in result.output.lower()
+
+    @pytest.mark.asyncio
+    async def test_create_zip_blocked_for_sensitive_path(self):
+        tool = CreateZipTool()
+        result = await tool.run("z5", {
+            "output_path": "/etc/malicious.zip",
+            "files": [{"name": "x.txt", "content": "bad"}],
+        })
+        assert result.success
+        assert "blocked" in result.output.lower() or "protected" in result.output.lower()
+
+    @pytest.mark.asyncio
+    async def test_create_zip_creates_parent_dirs(self, tmp_path):
+        target = tmp_path / "deep" / "nested" / "output.zip"
+        tool = CreateZipTool()
+        result = await tool.run("z6", {
+            "output_path": str(target),
+            "files": [{"name": "file.txt", "content": "data"}],
+        })
+        assert result.success
+        assert target.exists()
 
 
 class TestListFilesTool:
