@@ -365,6 +365,7 @@ class Orchestrator:
         """Process a user request end-to-end."""
         self._session_id = session_id
         self._images = images
+        self._session_tokens = 0  # Reset per-request to avoid cross-request accumulation
         _start_time = time.time()
 
         # Check session budget before starting

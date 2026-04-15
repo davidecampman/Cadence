@@ -54,8 +54,25 @@ class ChatStore:
         conn.execute("PRAGMA foreign_keys=ON")
         return conn
 
+    def _conn_ctx(self):
+        """Context manager that opens a connection, yields it, and closes it."""
+        import contextlib
+
+        @contextlib.contextmanager
+        def _ctx():
+            conn = self._get_conn()
+            try:
+                yield conn
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+        return _ctx()
+
     def _init_db(self) -> None:
-        with self._lock, self._get_conn() as conn:
+        with self._lock, self._conn_ctx() as conn:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS chats (
                     id TEXT PRIMARY KEY,
@@ -93,7 +110,7 @@ class ChatStore:
 
     def list_chats(self) -> list[ChatRecord]:
         """Return all chats (without messages) ordered by most recent first."""
-        with self._lock, self._get_conn() as conn:
+        with self._lock, self._conn_ctx() as conn:
             rows = conn.execute(
                 "SELECT * FROM chats ORDER BY updated_at DESC"
             ).fetchall()
@@ -110,7 +127,7 @@ class ChatStore:
 
     def get_chat(self, chat_id: str) -> ChatRecord | None:
         """Return a chat with all its messages."""
-        with self._lock, self._get_conn() as conn:
+        with self._lock, self._conn_ctx() as conn:
             row = conn.execute(
                 "SELECT * FROM chats WHERE id = ?", (chat_id,)
             ).fetchone()
@@ -153,7 +170,7 @@ class ChatStore:
         """Create a new empty chat."""
         now = created_at or time.time()
         cid = chat_id or str(uuid.uuid4())
-        with self._lock, self._get_conn() as conn:
+        with self._lock, self._conn_ctx() as conn:
             conn.execute(
                 "INSERT INTO chats (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
                 (cid, title, now, now),
@@ -167,7 +184,7 @@ class ChatStore:
         session_id: str | None = None,
     ) -> ChatRecord | None:
         """Update chat metadata (title, session_id)."""
-        with self._lock, self._get_conn() as conn:
+        with self._lock, self._conn_ctx() as conn:
             row = conn.execute("SELECT * FROM chats WHERE id = ?", (chat_id,)).fetchone()
             if not row:
                 return None
@@ -191,7 +208,7 @@ class ChatStore:
 
     def delete_chat(self, chat_id: str) -> bool:
         """Delete a chat and all its messages. Returns True if found."""
-        with self._lock, self._get_conn() as conn:
+        with self._lock, self._conn_ctx() as conn:
             cursor = conn.execute("DELETE FROM chats WHERE id = ?", (chat_id,))
             return cursor.rowcount > 0
 
@@ -201,7 +218,7 @@ class ChatStore:
         """Append a message to a chat. Auto-creates the chat if it doesn't exist."""
         trace_json = json.dumps(msg.trace_steps) if msg.trace_steps else None
         now = time.time()
-        with self._lock, self._get_conn() as conn:
+        with self._lock, self._conn_ctx() as conn:
             # Ensure parent chat exists (handles race where message arrives before create)
             conn.execute(
                 """INSERT OR IGNORE INTO chats (id, title, session_id, created_at, updated_at)
@@ -224,7 +241,7 @@ class ChatStore:
 
     def get_session_history(self, session_id: str) -> list[dict[str, str]]:
         """Load conversation history for a session."""
-        with self._lock, self._get_conn() as conn:
+        with self._lock, self._conn_ctx() as conn:
             row = conn.execute(
                 "SELECT history FROM session_history WHERE session_id = ?",
                 (session_id,),
@@ -242,7 +259,7 @@ class ChatStore:
         """Persist conversation history for a session."""
         now = time.time()
         history_json = json.dumps(history)
-        with self._lock, self._get_conn() as conn:
+        with self._lock, self._conn_ctx() as conn:
             conn.execute(
                 """INSERT INTO session_history (session_id, history, summary, updated_at)
                    VALUES (?, ?, ?, ?)
@@ -255,7 +272,7 @@ class ChatStore:
 
     def get_session_summary(self, session_id: str) -> str:
         """Load compressed summary for a session."""
-        with self._lock, self._get_conn() as conn:
+        with self._lock, self._conn_ctx() as conn:
             row = conn.execute(
                 "SELECT summary FROM session_history WHERE session_id = ?",
                 (session_id,),
@@ -265,7 +282,7 @@ class ChatStore:
     def save_session_summary(self, session_id: str, summary: str) -> None:
         """Update just the summary for a session."""
         now = time.time()
-        with self._lock, self._get_conn() as conn:
+        with self._lock, self._conn_ctx() as conn:
             conn.execute(
                 """INSERT INTO session_history (session_id, history, summary, updated_at)
                    VALUES (?, '[]', ?, ?)

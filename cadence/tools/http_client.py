@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import socket
 import urllib.error
@@ -77,19 +78,26 @@ class HttpRequestTool(Tool):
 
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
 
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                status = resp.status
-                resp_headers = dict(resp.headers)
-                raw = resp.read().decode(errors="replace")
-        except urllib.error.HTTPError as e:
-            status = e.code
-            resp_headers = dict(e.headers)
-            raw = e.read().decode(errors="replace")
-        except urllib.error.URLError as e:
-            return f"Request failed: {e}"
-        except socket.timeout:
-            return f"Request timed out after {timeout} seconds"
+        def _blocking_request():
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    st = resp.status
+                    rh = dict(resp.headers)
+                    body = resp.read(max_response_chars * 4).decode(errors="replace")
+                return st, rh, body, None
+            except urllib.error.HTTPError as e:
+                st = e.code
+                rh = dict(e.headers)
+                body = e.read(max_response_chars * 4).decode(errors="replace")
+                return st, rh, body, None
+            except urllib.error.URLError as e:
+                return None, None, None, f"Request failed: {e}"
+            except socket.timeout:
+                return None, None, None, f"Request timed out after {timeout} seconds"
+
+        status, resp_headers, raw, error = await asyncio.to_thread(_blocking_request)
+        if error:
+            return error
 
         # Try to pretty-print JSON responses
         content_type = resp_headers.get("Content-Type", "")

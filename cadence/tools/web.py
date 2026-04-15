@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import json
 import socket
@@ -98,13 +99,20 @@ class WebFetchTool(Tool):
         if validation_error:
             return f"URL validation failed: {validation_error}"
 
-        req = urllib.request.Request(url, headers={"User-Agent": "Cadence/0.1"})
-        try:
+        def _blocking_fetch():
+            req = urllib.request.Request(url, headers={"User-Agent": "Cadence/0.1"})
             with urllib.request.urlopen(req, timeout=30) as resp:
                 content_type = resp.headers.get("Content-Type", "")
-                raw = resp.read().decode(errors="replace")
+                # Cap read size to avoid OOM from malicious servers
+                raw = resp.read(max_chars * 4).decode(errors="replace")
+            return content_type, raw
+
+        try:
+            content_type, raw = await asyncio.to_thread(_blocking_fetch)
         except urllib.error.URLError as e:
             return f"Fetch failed: {e}"
+        except Exception as e:
+            return f"Fetch failed: {type(e).__name__}: {e}"
 
         if "html" in content_type.lower():
             extractor = _TextExtractor()

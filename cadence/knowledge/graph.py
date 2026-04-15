@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import uuid
 from pathlib import Path
@@ -94,12 +95,25 @@ class KnowledgeGraph:
             )
 
     def _save(self) -> None:
-        """Persist graph state to disk."""
+        """Persist graph state to disk atomically (write to temp then rename)."""
         data = {
             "entities": [e.model_dump() for e in self._entities.values()],
             "relationships": [r.model_dump() for r in self._relationships.values()],
         }
-        self._persist_path.write_text(json.dumps(data, indent=2))
+        import tempfile
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=self._persist_path.parent, suffix=".tmp"
+        )
+        try:
+            with os.fdopen(tmp_fd, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp_path, self._persist_path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def add_entity(
         self,

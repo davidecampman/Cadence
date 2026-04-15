@@ -231,7 +231,9 @@ class GrepTool(Tool):
         if base.is_file():
             files = [base]
         else:
-            files = sorted(base.rglob(glob.lstrip("**/") if glob == "**/*" else glob))[:1000]
+            # rglob("*") matches all files recursively; strip leading "**/" prefix properly
+            rglob_pattern = "*" if glob in ("**/*", "**/") else glob.removeprefix("**/")
+            files = sorted(base.rglob(rglob_pattern))[:1000]
 
         results: list[str] = []
         total = 0

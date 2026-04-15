@@ -111,7 +111,9 @@ class StreamCollector:
         await self.close()
 
     async def close(self) -> None:
-        """Signal end of stream."""
+        """Signal end of stream. Safe to call multiple times."""
+        if self._closed:
+            return
         self._closed = True
         await self._queue.put(None)
 

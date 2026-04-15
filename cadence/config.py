@@ -94,12 +94,13 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
             if section in data and isinstance(data[section], dict):
                 # Attempt type coercion for numeric values
                 existing = data[section].get(field)
-                if isinstance(existing, int):
+                # Check bool before int because bool is a subclass of int
+                if isinstance(existing, bool):
+                    value = value.lower() in ("true", "1", "yes")
+                elif isinstance(existing, int):
                     value = int(value)
                 elif isinstance(existing, float):
                     value = float(value)
-                elif isinstance(existing, bool):
-                    value = value.lower() in ("true", "1", "yes")
                 data[section][field] = value
     return data
 

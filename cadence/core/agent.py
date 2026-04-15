@@ -253,14 +253,19 @@ class Agent:
         # Scope memory tools to this agent's namespace
         scoped_tools = self.tools.scoped_copy(self.id)
 
+        # Reset per-run state so the agent can be reused
+        self._iterations = 0
+        self._total_tokens = 0
+
         # Initialize with system prompt, prior conversation context, and current task
         self._history = [
             Message(role=Role.SYSTEM, content=self._system_prompt()),
         ]
 
         # Inject prior conversation turns so the agent knows what was discussed
+        _role_map = {"user": Role.USER, "assistant": Role.ASSISTANT, "system": Role.SYSTEM}
         for entry in (conversation_history or []):
-            role = Role.USER if entry["role"] == "user" else Role.ASSISTANT
+            role = _role_map.get(entry["role"], Role.USER)
             self._history.append(Message(role=role, content=entry["content"]))
 
         # Add the current user message, with images if provided
@@ -464,13 +469,18 @@ class Agent:
         """
         await collector.emit_status("starting", agent_id=self.id)
 
+        # Reset per-run state so the agent can be reused
+        self._iterations = 0
+        self._total_tokens = 0
+
         # Run the normal agent loop but emit tool events to the collector
         self.trace.observation(self.id, f"Task received: {task}")
         scoped_tools = self.tools.scoped_copy(self.id)
 
         self._history = [Message(role=Role.SYSTEM, content=self._system_prompt())]
+        _role_map = {"user": Role.USER, "assistant": Role.ASSISTANT, "system": Role.SYSTEM}
         for entry in (conversation_history or []):
-            role = Role.USER if entry["role"] == "user" else Role.ASSISTANT
+            role = _role_map.get(entry["role"], Role.USER)
             self._history.append(Message(role=role, content=entry["content"]))
 
         if images:
@@ -542,7 +552,10 @@ class Agent:
                         tool_calls.append(ToolCall(**tc_data) if isinstance(tc_data, dict) else tc_data)
 
             self._total_tokens += usage.get("total_tokens", 0)
-            text = "".join(text_parts) if text_parts else ""
+            # Prefer text from the 'done' event (authoritative); fall back to
+            # accumulated text_parts only if the done event didn't provide it.
+            if not text:
+                text = "".join(text_parts) if text_parts else ""
 
             if not tool_calls:
                 self._history.append(Message(role=Role.ASSISTANT, content=text))

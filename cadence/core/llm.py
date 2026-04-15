@@ -56,16 +56,29 @@ def _classify_error(e: Exception) -> LLMError:
     )
 
     msg_lower = msg.lower()
+    err_type_lower = err_type.lower()
 
-    for pattern in permanent_patterns:
-        if pattern in msg_lower or pattern in err_type.lower():
-            return LLMError(msg, transient=False, provider=err_type)
+    # Check specific exception types first (most reliable classification)
+    if isinstance(e, (ConnectionError, TimeoutError, asyncio.TimeoutError)):
+        return LLMError(msg, transient=True, provider=err_type)
+    if isinstance(e, (openai.APIConnectionError, openai.APITimeoutError)):
+        return LLMError(msg, transient=True, provider="openai")
+    if isinstance(e, openai.RateLimitError):
+        return LLMError(msg, transient=True, provider="openai")
+    if isinstance(e, openai.AuthenticationError):
+        return LLMError(msg, transient=False, provider="openai")
 
+    # Check transient patterns first so rate-limit errors with "401" in the
+    # message are correctly classified as transient (retryable).
     for pattern in transient_patterns:
-        if pattern in msg_lower or pattern in err_type.lower():
+        if pattern in msg_lower or pattern in err_type_lower:
             return LLMError(msg, transient=True, provider=err_type)
 
-    # Network-level errors are transient
+    for pattern in permanent_patterns:
+        if pattern in msg_lower or pattern in err_type_lower:
+            return LLMError(msg, transient=False, provider=err_type)
+
+    # Network-level errors are transient (fallback for unlisted types)
     if isinstance(e, (ConnectionError, TimeoutError, asyncio.TimeoutError)):
         return LLMError(msg, transient=True, provider=err_type)
     if isinstance(e, (openai.APIConnectionError, openai.APITimeoutError)):
@@ -703,7 +716,7 @@ async def _codex_oauth_completion(
                     arguments=args,
                 ))
 
-    text = "\n".join(text_parts) if text_parts else ""
+    text = "".join(text_parts) if text_parts else ""
 
     resp_usage = data.get("usage", {})
     usage = {
@@ -973,49 +986,48 @@ async def _openai_completion(
         api_key = os.environ.get("OPENAI_API_KEY", "")
         api_model = model
 
-    client = openai.AsyncOpenAI(base_url=base_url, api_key=api_key)
+    async with openai.AsyncOpenAI(base_url=base_url, api_key=api_key) as client:
+        kwargs: dict[str, Any] = {
+            "model": api_model,
+            "messages": _messages_to_dicts(messages),
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
 
-    kwargs: dict[str, Any] = {
-        "model": api_model,
-        "messages": _messages_to_dicts(messages),
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
+        use_native_tools = tools and supports_native_tools(model, local_config=local_config)
+        if use_native_tools:
+            kwargs["tools"] = _tools_to_dicts(tools)
+            kwargs["tool_choice"] = "auto"
 
-    use_native_tools = tools and supports_native_tools(model, local_config=local_config)
-    if use_native_tools:
-        kwargs["tools"] = _tools_to_dicts(tools)
-        kwargs["tool_choice"] = "auto"
+        response = await client.chat.completions.create(**kwargs)
+        choice = response.choices[0]
+        message = choice.message
 
-    response = await client.chat.completions.create(**kwargs)
-    choice = response.choices[0]
-    message = choice.message
+        text = message.content or ""
+        tool_calls: list[ToolCall] = []
 
-    text = message.content or ""
-    tool_calls: list[ToolCall] = []
+        if use_native_tools and message.tool_calls:
+            for tc in message.tool_calls:
+                try:
+                    args = json.loads(tc.function.arguments) if tc.function.arguments else {}
+                except json.JSONDecodeError:
+                    args = {"raw": tc.function.arguments}
+                tool_calls.append(ToolCall(
+                    id=tc.id or "",
+                    name=tc.function.name,
+                    arguments=args,
+                ))
+        elif not use_native_tools and text:
+            tool_calls = _extract_tool_calls_from_text(text)
 
-    if use_native_tools and message.tool_calls:
-        for tc in message.tool_calls:
-            try:
-                args = json.loads(tc.function.arguments) if tc.function.arguments else {}
-            except json.JSONDecodeError:
-                args = {"raw": tc.function.arguments}
-            tool_calls.append(ToolCall(
-                id=tc.id or "",
-                name=tc.function.name,
-                arguments=args,
-            ))
-    elif not use_native_tools and text:
-        tool_calls = _extract_tool_calls_from_text(text)
+        usage = {
+            "prompt_tokens": getattr(response.usage, "prompt_tokens", 0) or 0,
+            "completion_tokens": getattr(response.usage, "completion_tokens", 0) or 0,
+            "total_tokens": getattr(response.usage, "total_tokens", 0) or 0,
+            "model": model,
+        }
 
-    usage = {
-        "prompt_tokens": getattr(response.usage, "prompt_tokens", 0) or 0,
-        "completion_tokens": getattr(response.usage, "completion_tokens", 0) or 0,
-        "total_tokens": getattr(response.usage, "total_tokens", 0) or 0,
-        "model": model,
-    }
-
-    return text, tool_calls, usage
+        return text, tool_calls, usage
 
 
 # ---------------------------------------------------------------------------
@@ -1056,51 +1068,54 @@ async def _anthropic_completion(
         api_model = model
 
     client = _build_anthropic_client(provider, bedrock_config)
-    # Enable prompt caching for direct Anthropic (not Bedrock)
-    use_cache = enable_cache and provider == "anthropic"
-    system, api_messages = _messages_to_anthropic(messages, enable_cache=use_cache)
+    try:
+        # Enable prompt caching for direct Anthropic (not Bedrock)
+        use_cache = enable_cache and provider == "anthropic"
+        system, api_messages = _messages_to_anthropic(messages, enable_cache=use_cache)
 
-    kwargs: dict[str, Any] = {
-        "model": api_model,
-        "messages": api_messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-    if system is not anthropic.NOT_GIVEN:
-        kwargs["system"] = system
-    if tools:
-        kwargs["tools"] = _tools_to_anthropic(tools)
+        kwargs: dict[str, Any] = {
+            "model": api_model,
+            "messages": api_messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if system is not anthropic.NOT_GIVEN:
+            kwargs["system"] = system
+        if tools:
+            kwargs["tools"] = _tools_to_anthropic(tools)
 
-    response = await client.messages.create(**kwargs)
+        response = await client.messages.create(**kwargs)
 
-    text_parts: list[str] = []
-    tool_calls: list[ToolCall] = []
+        text_parts: list[str] = []
+        tool_calls: list[ToolCall] = []
 
-    for block in response.content:
-        if block.type == "text":
-            text_parts.append(block.text)
-        elif block.type == "tool_use":
-            tool_calls.append(ToolCall(
-                id=block.id,
-                name=block.name,
-                arguments=block.input if isinstance(block.input, dict) else {},
-            ))
+        for block in response.content:
+            if block.type == "text":
+                text_parts.append(block.text)
+            elif block.type == "tool_use":
+                tool_calls.append(ToolCall(
+                    id=block.id,
+                    name=block.name,
+                    arguments=block.input if isinstance(block.input, dict) else {},
+                ))
 
-    text = "\n".join(text_parts) if text_parts else ""
+        text = "".join(text_parts) if text_parts else ""
 
-    usage = {
-        "prompt_tokens": response.usage.input_tokens,
-        "completion_tokens": response.usage.output_tokens,
-        "total_tokens": response.usage.input_tokens + response.usage.output_tokens,
-        "model": model,
-    }
-    # Include cache metrics if available
-    if hasattr(response.usage, "cache_creation_input_tokens"):
-        usage["cache_creation_tokens"] = response.usage.cache_creation_input_tokens
-    if hasattr(response.usage, "cache_read_input_tokens"):
-        usage["cache_read_tokens"] = response.usage.cache_read_input_tokens
+        usage = {
+            "prompt_tokens": response.usage.input_tokens,
+            "completion_tokens": response.usage.output_tokens,
+            "total_tokens": response.usage.input_tokens + response.usage.output_tokens,
+            "model": model,
+        }
+        # Include cache metrics if available
+        if hasattr(response.usage, "cache_creation_input_tokens"):
+            usage["cache_creation_tokens"] = response.usage.cache_creation_input_tokens
+        if hasattr(response.usage, "cache_read_input_tokens"):
+            usage["cache_read_tokens"] = response.usage.cache_read_input_tokens
 
-    return text, tool_calls, usage
+        return text, tool_calls, usage
+    finally:
+        await client.close()
 
 
 async def stream_completion(
@@ -1172,86 +1187,87 @@ async def _anthropic_stream(
         api_model = model
 
     client = _build_anthropic_client(provider, bedrock_config)
-    use_cache = provider == "anthropic"
-    system, api_messages = _messages_to_anthropic(messages, enable_cache=use_cache)
+    try:
+        use_cache = provider == "anthropic"
+        system, api_messages = _messages_to_anthropic(messages, enable_cache=use_cache)
 
-    kwargs: dict[str, Any] = {
-        "model": api_model,
-        "messages": api_messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-    if system is not anthropic.NOT_GIVEN:
-        kwargs["system"] = system
-    if tools:
-        kwargs["tools"] = _tools_to_anthropic(tools)
+        kwargs: dict[str, Any] = {
+            "model": api_model,
+            "messages": api_messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if system is not anthropic.NOT_GIVEN:
+            kwargs["system"] = system
+        if tools:
+            kwargs["tools"] = _tools_to_anthropic(tools)
 
-    text_parts: list[str] = []
-    tool_calls: list[ToolCall] = []
-    current_tool_id = ""
-    current_tool_name = ""
-    current_tool_json = ""
+        text_parts: list[str] = []
+        tool_calls: list[ToolCall] = []
+        current_tool_id = ""
+        current_tool_name = ""
+        current_tool_json = ""
 
-    usage: dict[str, Any] = {}
+        usage: dict[str, Any] = {}
 
-    async with client.messages.stream(**kwargs) as stream:
-        async for event in stream:
-            if event.type == "content_block_start":
-                block = event.content_block
-                if block.type == "tool_use":
-                    current_tool_id = block.id
-                    current_tool_name = block.name
-                    current_tool_json = ""
-                    yield {"type": "tool_use_start", "id": block.id, "name": block.name}
-            elif event.type == "content_block_delta":
-                delta = event.delta
-                if delta.type == "text_delta":
-                    text_parts.append(delta.text)
-                    yield {"type": "token", "text": delta.text}
-                elif delta.type == "input_json_delta":
-                    current_tool_json += delta.partial_json
-                    yield {"type": "tool_use_input", "partial_json": delta.partial_json}
-            elif event.type == "content_block_stop":
-                if current_tool_name:
-                    try:
-                        args = json.loads(current_tool_json) if current_tool_json else {}
-                    except json.JSONDecodeError:
-                        args = {"raw": current_tool_json}
-                    tool_calls.append(ToolCall(
-                        id=current_tool_id,
-                        name=current_tool_name,
-                        arguments=args,
-                    ))
-                    current_tool_name = ""
-                    current_tool_json = ""
-            elif event.type == "message_delta":
-                # Capture usage from the message_delta event (end of stream)
-                if hasattr(event, "usage") and event.usage:
-                    output_tokens = getattr(event.usage, "output_tokens", 0)
-                    usage["completion_tokens"] = output_tokens
-            elif event.type == "message_start":
-                # Capture input usage from message_start
-                if hasattr(event, "message") and hasattr(event.message, "usage"):
-                    msg_usage = event.message.usage
-                    usage["prompt_tokens"] = getattr(msg_usage, "input_tokens", 0)
-                    if hasattr(msg_usage, "cache_creation_input_tokens"):
-                        usage["cache_creation_tokens"] = msg_usage.cache_creation_input_tokens
-                    if hasattr(msg_usage, "cache_read_input_tokens"):
-                        usage["cache_read_tokens"] = msg_usage.cache_read_input_tokens
+        async with client.messages.stream(**kwargs) as stream:
+            async for event in stream:
+                if event.type == "content_block_start":
+                    block = event.content_block
+                    if block.type == "tool_use":
+                        current_tool_id = block.id
+                        current_tool_name = block.name
+                        current_tool_json = ""
+                        yield {"type": "tool_use_start", "id": block.id, "name": block.name}
+                elif event.type == "content_block_delta":
+                    delta = event.delta
+                    if delta.type == "text_delta":
+                        text_parts.append(delta.text)
+                        yield {"type": "token", "text": delta.text}
+                    elif delta.type == "input_json_delta":
+                        current_tool_json += delta.partial_json
+                        yield {"type": "tool_use_input", "partial_json": delta.partial_json}
+                elif event.type == "content_block_stop":
+                    if current_tool_name:
+                        try:
+                            args = json.loads(current_tool_json) if current_tool_json else {}
+                        except json.JSONDecodeError:
+                            args = {"raw": current_tool_json}
+                        tool_calls.append(ToolCall(
+                            id=current_tool_id,
+                            name=current_tool_name,
+                            arguments=args,
+                        ))
+                        current_tool_name = ""
+                        current_tool_json = ""
+                elif event.type == "message_delta":
+                    if hasattr(event, "usage") and event.usage:
+                        output_tokens = getattr(event.usage, "output_tokens", 0)
+                        usage["completion_tokens"] = output_tokens
+                elif event.type == "message_start":
+                    if hasattr(event, "message") and hasattr(event.message, "usage"):
+                        msg_usage = event.message.usage
+                        usage["prompt_tokens"] = getattr(msg_usage, "input_tokens", 0)
+                        if hasattr(msg_usage, "cache_creation_input_tokens"):
+                            usage["cache_creation_tokens"] = msg_usage.cache_creation_input_tokens
+                        if hasattr(msg_usage, "cache_read_input_tokens"):
+                            usage["cache_read_tokens"] = msg_usage.cache_read_input_tokens
 
-    # Finalize usage
-    prompt_tokens = usage.get("prompt_tokens", 0)
-    completion_tokens = usage.get("completion_tokens", 0)
-    usage["total_tokens"] = prompt_tokens + completion_tokens
-    usage["model"] = model
+        # Finalize usage
+        prompt_tokens = usage.get("prompt_tokens", 0)
+        completion_tokens = usage.get("completion_tokens", 0)
+        usage["total_tokens"] = prompt_tokens + completion_tokens
+        usage["model"] = model
 
-    text = "".join(text_parts)
-    yield {
-        "type": "done",
-        "text": text,
-        "tool_calls": [tc.model_dump() for tc in tool_calls],
-        "usage": usage,
-    }
+        text = "".join(text_parts)
+        yield {
+            "type": "done",
+            "text": text,
+            "tool_calls": [tc.model_dump() for tc in tool_calls],
+            "usage": usage,
+        }
+    finally:
+        await client.close()
 
 
 # ---------------------------------------------------------------------------

@@ -226,6 +226,22 @@ class MCPClient:
             env=env,
         )
         self._reader_task = asyncio.create_task(self._stdio_reader())
+        # Drain stderr in the background to prevent the subprocess from
+        # blocking when the stderr pipe buffer fills up.
+        self._stderr_task = asyncio.create_task(self._stderr_drain())
+
+    async def _stderr_drain(self) -> None:
+        """Drain stderr to prevent pipe buffer deadlocks."""
+        if not self._process or not self._process.stderr:
+            return
+        try:
+            while True:
+                chunk = await self._process.stderr.read(4096)
+                if not chunk:
+                    break
+                logger.debug("MCP '%s' stderr: %s", self.name, chunk.decode(errors="replace").strip())
+        except Exception:
+            pass
 
     async def _stdio_reader(self) -> None:
         """Background task that reads JSON-RPC responses from stdout."""

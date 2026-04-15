@@ -26,8 +26,11 @@ class TraceLogger:
         self._steps.append(step)
 
         if self._file_path:
-            with open(self._file_path, "a", encoding="utf-8") as f:
-                f.write(step.model_dump_json() + "\n")
+            try:
+                with open(self._file_path, "a", encoding="utf-8") as f:
+                    f.write(step.model_dump_json() + "\n")
+            except OSError:
+                pass  # Trace file is non-critical; never crash the agent loop
 
         if self._console:
             _print_step(step)

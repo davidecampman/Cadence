@@ -9,8 +9,13 @@ from pathlib import Path
 from cadence.core.types import PermissionTier
 from cadence.tools.base import Tool
 
-# Statements that modify data or schema
-_WRITE_KEYWORDS = {"INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "REPLACE", "TRUNCATE"}
+# Statements that modify data or schema, plus dangerous commands
+_WRITE_KEYWORDS = {
+    "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "REPLACE",
+    "TRUNCATE", "ATTACH", "DETACH", "PRAGMA", "VACUUM", "REINDEX",
+}
+# Dangerous SQL features that should always be blocked
+_BLOCKED_PATTERNS = {"LOAD_EXTENSION", "LOAD EXTENSION"}
 
 # Regex to detect write operations even when hidden behind CTEs, comments, or
 # compound statements.  Strips SQL comments first, then checks all statement
@@ -22,6 +27,13 @@ def _contains_write_operation(query: str) -> str | None:
     """Return the first write keyword found in *query*, or None if read-only."""
     # Strip comments so they can't hide write operations
     cleaned = _SQL_COMMENT_RE.sub(" ", query)
+
+    # Always block dangerous features regardless of allow_write
+    upper_full = cleaned.upper()
+    for pattern in _BLOCKED_PATTERNS:
+        if pattern in upper_full:
+            return pattern
+
     # Split on semicolons to catch compound statements
     for stmt in cleaned.split(";"):
         tokens = stmt.strip().split()
@@ -31,11 +43,16 @@ def _contains_write_operation(query: str) -> str | None:
         if word in _WRITE_KEYWORDS:
             return word
         # Catch "WITH ... INSERT/UPDATE/DELETE" (CTE-based writes)
-        upper = stmt.upper()
+        # Use word-boundary matching to avoid false positives on table/column names
         if word == "WITH":
+            import re as _re
             for kw in ("INSERT", "UPDATE", "DELETE"):
-                if kw in upper:
-                    return kw
+                if _re.search(rf"\b{kw}\b", stmt, _re.IGNORECASE):
+                    # Verify it's a statement keyword, not inside a subquery/identifier
+                    # by checking that it appears as a standalone token
+                    for t in tokens:
+                        if t.upper() == kw:
+                            return kw
     return None
 
 
@@ -79,6 +96,12 @@ class SqlQueryTool(Tool):
         allow_write: bool = False,
         max_rows: int = 100,
     ) -> str:
+        # Always block dangerous operations (even with allow_write)
+        upper_q = query.upper()
+        for blocked in _BLOCKED_PATTERNS:
+            if blocked in upper_q:
+                return f"Operation '{blocked}' is always blocked for security."
+
         # Safety check for write operations
         write_kw = _contains_write_operation(query)
         if write_kw and not allow_write:
