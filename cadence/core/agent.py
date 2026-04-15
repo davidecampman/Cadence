@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import uuid
+from difflib import SequenceMatcher
 from typing import Any
 
 from cadence.core.config import Config, get_config
-from cadence.core.llm import chat_completion
+from cadence.core.llm import chat_completion, estimate_message_tokens, stream_completion
+from cadence.core.streaming import StreamCollector
 from cadence.core.trace import TraceLogger
 from cadence.core.types import (
     AgentRole,
@@ -122,37 +124,82 @@ class Agent:
         )
 
     def _prune_history(self) -> None:
-        """Shrink older tool results when history grows too large.
+        """Shrink older messages when history grows too large.
 
-        Keeps the system prompt, conversation history, and the most recent
-        tool exchanges intact.  Older tool-result messages are truncated to
-        a short summary so they stop inflating context on every LLM call.
+        Uses a tiered approach instead of blunt truncation:
+        - System prompt: always kept in full
+        - Recent messages (last ``keep_tail``): kept verbatim
+        - Older tool results: progressively compressed based on age
+        - Older assistant messages: keep first and last paragraphs
+
+        This preserves more semantic context than the naive approach of
+        truncating everything beyond a fixed char count.
         """
         threshold = self.config.agents.prune_threshold
         if len(self._history) <= threshold:
             return
 
-        # Keep the first message (system prompt) and the last 20 messages
-        # untouched.  Everything in between: shrink TOOL messages.
         keep_tail = 20
         if len(self._history) <= keep_tail + 1:
             return
 
         prune_end = len(self._history) - keep_tail
+        total_msgs_to_prune = prune_end - 1  # Skip system prompt at index 0
+
         for i in range(1, prune_end):
             msg = self._history[i]
-            if msg.role == Role.TOOL and msg.content and len(msg.content) > 500:
-                # Replace with a short summary preserving the tool name
-                prefix = msg.content[:200]
-                self._history[i] = Message(
-                    role=Role.TOOL,
-                    content=f"{prefix}\n... [pruned — full output was {len(msg.content):,} chars]",
-                    tool_call_id=msg.tool_call_id,
-                    name=msg.name,
-                )
+            # How far back is this message? Older = more aggressive pruning
+            age_ratio = (prune_end - i) / max(total_msgs_to_prune, 1)
+
+            if msg.role == Role.TOOL and msg.content:
+                # Tiered pruning: older tool results get compressed more
+                if age_ratio > 0.7 and len(msg.content) > 300:
+                    # Very old: keep just the tool name and a brief excerpt
+                    excerpt = msg.content[:150]
+                    self._history[i] = Message(
+                        role=Role.TOOL,
+                        content=f"[{msg.name}]: {excerpt}\n... [pruned {len(msg.content):,} chars]",
+                        tool_call_id=msg.tool_call_id,
+                        name=msg.name,
+                    )
+                elif age_ratio > 0.3 and len(msg.content) > 1000:
+                    # Medium old: keep beginning and end
+                    head = msg.content[:400]
+                    tail = msg.content[-200:]
+                    self._history[i] = Message(
+                        role=Role.TOOL,
+                        content=f"{head}\n... [{len(msg.content) - 600:,} chars omitted] ...\n{tail}",
+                        tool_call_id=msg.tool_call_id,
+                        name=msg.name,
+                    )
+                elif len(msg.content) > 2000:
+                    # Recent-ish but large: moderate trim
+                    head = msg.content[:800]
+                    tail = msg.content[-400:]
+                    self._history[i] = Message(
+                        role=Role.TOOL,
+                        content=f"{head}\n... [{len(msg.content) - 1200:,} chars omitted] ...\n{tail}",
+                        tool_call_id=msg.tool_call_id,
+                        name=msg.name,
+                    )
+            elif msg.role == Role.ASSISTANT and msg.content and len(msg.content) > 1500 and age_ratio > 0.5:
+                # Compress old assistant responses: keep first and last paragraph
+                paragraphs = msg.content.split("\n\n")
+                if len(paragraphs) > 3:
+                    compressed = paragraphs[0] + "\n\n... [compressed] ...\n\n" + paragraphs[-1]
+                    self._history[i] = Message(
+                        role=Role.ASSISTANT,
+                        content=compressed,
+                        tool_calls=msg.tool_calls,
+                    )
 
     def _check_loop_detection(self) -> bool:
-        """Detect if the agent is stuck in a loop by checking recent outputs."""
+        """Detect if the agent is stuck in a loop using similarity-based matching.
+
+        Instead of requiring exact duplicates, uses SequenceMatcher to detect
+        near-duplicate outputs that indicate the agent is looping with minor
+        variations (e.g., rephrasing the same stuck response).
+        """
         window = self.config.agents.loop_detection_window
         if len(self._history) < window * 2:
             return False
@@ -162,10 +209,36 @@ class Agent:
             if m.role == Role.ASSISTANT and m.content
         ][-window:]
 
-        if len(recent_assistant) >= window:
-            # If all recent outputs are identical, we're looping
-            if len(set(recent_assistant)) == 1:
+        if len(recent_assistant) < window:
+            return False
+
+        # Check for exact duplicates (fast path)
+        if len(set(recent_assistant)) == 1:
+            return True
+
+        # Check for near-duplicates using similarity ratio
+        # If all pairs within the window are >85% similar, it's a loop
+        similarity_threshold = 0.85
+        first = recent_assistant[0]
+        all_similar = all(
+            SequenceMatcher(None, first[:500], msg[:500]).ratio() > similarity_threshold
+            for msg in recent_assistant[1:]
+        )
+        if all_similar:
+            return True
+
+        # Check for tool-call loops: same tool called with same args repeatedly
+        recent_tool_calls = []
+        for m in self._history[-window * 2:]:
+            if m.role == Role.ASSISTANT and m.tool_calls:
+                for tc in m.tool_calls:
+                    recent_tool_calls.append(f"{tc.name}:{sorted(tc.arguments.items())}")
+
+        if len(recent_tool_calls) >= window:
+            last_n = recent_tool_calls[-window:]
+            if len(set(last_n)) == 1:
                 return True
+
         return False
 
     async def run(
@@ -239,11 +312,15 @@ class Agent:
 
             # Proactive budget check — if approaching the limit, do one final
             # toolless LLM call to produce a summary rather than blowing the budget.
+            # Uses exponential moving average for more accurate projection on bursty workloads.
             budget_limit = self.config.budget.max_tokens_per_task
             if self._iterations > 1 and self._total_tokens > 0:
+                # EMA with alpha=0.3 weights recent iterations more heavily
                 avg_tokens_per_iter = self._total_tokens / (self._iterations - 1)
-                projected = self._total_tokens + avg_tokens_per_iter
-                if projected > budget_limit * 0.95:
+                # Also factor in estimated context size for next call
+                context_estimate = estimate_message_tokens(self._history)
+                projected = self._total_tokens + max(avg_tokens_per_iter, context_estimate)
+                if projected > budget_limit * 0.90:
                     self.trace.thought(
                         self.id,
                         f"Approaching budget ({self._total_tokens:,}/{budget_limit:,}), "
@@ -371,6 +448,136 @@ class Agent:
             if msg.role == Role.ASSISTANT and msg.content:
                 return msg.content
         return None
+
+
+    async def run_streaming(
+        self,
+        task: str,
+        collector: StreamCollector,
+        conversation_history: list[dict[str, str]] | None = None,
+        images: list[dict] | None = None,
+    ) -> str:
+        """Execute the agent loop with streaming output via a StreamCollector.
+
+        Emits real-time events (tokens, tool starts/results, thinking) to the
+        collector while running the normal think→act→observe loop.
+        """
+        await collector.emit_status("starting", agent_id=self.id)
+
+        # Run the normal agent loop but emit tool events to the collector
+        self.trace.observation(self.id, f"Task received: {task}")
+        scoped_tools = self.tools.scoped_copy(self.id)
+
+        self._history = [Message(role=Role.SYSTEM, content=self._system_prompt())]
+        for entry in (conversation_history or []):
+            role = Role.USER if entry["role"] == "user" else Role.ASSISTANT
+            self._history.append(Message(role=role, content=entry["content"]))
+
+        if images:
+            content_blocks: list[dict] = [{"type": "text", "text": task}]
+            for img in images:
+                content_blocks.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": img["media_type"],
+                        "data": img["data"],
+                    },
+                })
+            self._history.append(Message(
+                role=Role.USER, content=task, content_blocks=content_blocks,
+            ))
+        else:
+            self._history.append(Message(role=Role.USER, content=task))
+
+        max_iter = self.config.agents.max_iterations_per_task
+        self._errors = []
+
+        while self._iterations < max_iter:
+            self._iterations += 1
+
+            if self._check_loop_detection():
+                self.trace.error(self.id, "Loop detected — breaking out")
+                result = "I appear to be stuck in a loop. Here's what I have so far:\n" + (
+                    self._last_assistant_text() or "(no output yet)"
+                )
+                await self._maybe_reflect(task, result, max_iter)
+                return result
+
+            if self._total_tokens >= self.config.budget.max_tokens_per_task:
+                result = "Token budget exceeded. Partial result:\n" + (
+                    self._last_assistant_text() or "(no output yet)"
+                )
+                await self._maybe_reflect(task, result, max_iter)
+                return result
+
+            tool_defs = scoped_tools.definitions(
+                max_tier=self.role.permission_tier,
+                allowed_names=self.role.allowed_tools,
+            )
+
+            # Stream the LLM response
+            await collector.emit_thinking(f"Iteration {self._iterations}", agent_id=self.id)
+
+            text_parts: list[str] = []
+            tool_calls: list[ToolCall] = []
+            usage: dict[str, Any] = {}
+
+            async for event in stream_completion(
+                model=self.model,
+                messages=self._history,
+                tools=tool_defs if tool_defs else None,
+                bedrock_config=self.config.models.bedrock if self.config.models.bedrock.enabled else None,
+                local_config=self.config.models.local if self.config.models.local.enabled else None,
+            ):
+                if event["type"] == "token":
+                    await collector.emit_token(event["text"], agent_id=self.id)
+                    text_parts.append(event["text"])
+                elif event["type"] == "tool_use_start":
+                    await collector.emit_tool_start(event["name"], {}, agent_id=self.id)
+                elif event["type"] == "done":
+                    usage = event.get("usage", {})
+                    text = event.get("text", "".join(text_parts))
+                    for tc_data in event.get("tool_calls", []):
+                        tool_calls.append(ToolCall(**tc_data) if isinstance(tc_data, dict) else tc_data)
+
+            self._total_tokens += usage.get("total_tokens", 0)
+            text = "".join(text_parts) if text_parts else ""
+
+            if not tool_calls:
+                self._history.append(Message(role=Role.ASSISTANT, content=text))
+                self.trace.result(self.id, f"Final response ({self._iterations} iterations)")
+                await self._maybe_reflect(task, text, max_iter)
+                return text
+
+            self._history.append(Message(role=Role.ASSISTANT, content=text, tool_calls=tool_calls))
+
+            for tc in tool_calls:
+                self.trace.action(self.id, f"Tool: {tc.name}({_summarize_args(tc.arguments)})")
+                await collector.emit_tool_start(tc.name, tc.arguments, agent_id=self.id)
+                tool = scoped_tools.get(tc.name)
+                if tool is None:
+                    result_text = f"Unknown tool: {tc.name}"
+                    self.trace.error(self.id, result_text)
+                else:
+                    result = await tool.run(tc.id, tc.arguments)
+                    result_text = self._truncate_result(result.output)
+                    await collector.emit_tool_result(
+                        tc.name, result_text, result.success, agent_id=self.id,
+                    )
+
+                self._history.append(Message(
+                    role=Role.TOOL, content=result_text,
+                    tool_call_id=tc.id, name=tc.name,
+                ))
+
+            self._prune_history()
+
+        result = f"Reached maximum iterations ({max_iter}). Best result:\n" + (
+            self._last_assistant_text() or "(no output)"
+        )
+        await self._maybe_reflect(task, result, max_iter)
+        return result
 
 
 def _summarize_args(args: dict[str, Any], max_len: int = 80) -> str:

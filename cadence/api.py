@@ -89,6 +89,13 @@ _chat_store: ChatStore | None = None
 # Maps session_id → running asyncio.Task so they can be cancelled
 _running_tasks: dict[str, asyncio.Task] = {}
 
+# Concurrency limiter for chat requests
+_MAX_CONCURRENT_REQUESTS = 5
+_chat_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_REQUESTS)
+
+# Request timeout (seconds)
+_CHAT_REQUEST_TIMEOUT = 600  # 10 minutes
+
 
 def get_app() -> CadenceApp:
     global _agent_app
@@ -107,36 +114,83 @@ def get_chat_store() -> ChatStore:
     return _chat_store
 
 
-# --- WebSocket connections for live trace streaming ---
-_ws_clients: set[WebSocket] = set()
+# --- WebSocket connections with per-client async queues ---
+
+class WSClient:
+    """A WebSocket client with its own async message queue for backpressure handling."""
+
+    __slots__ = ("ws", "queue", "consecutive_failures")
+
+    def __init__(self, ws: WebSocket, max_queue: int = 100):
+        self.ws = ws
+        self.queue: asyncio.Queue[str] = asyncio.Queue(maxsize=max_queue)
+        self.consecutive_failures = 0
+
+    async def send(self, msg: str) -> bool:
+        """Enqueue a message without blocking. Returns False if queue is full."""
+        try:
+            self.queue.put_nowait(msg)
+            return True
+        except asyncio.QueueFull:
+            self.consecutive_failures += 1
+            return False
+
+    async def drain(self) -> None:
+        """Process queued messages. Runs as a background task per client."""
+        while True:
+            msg = await self.queue.get()
+            if msg is None:  # Shutdown signal
+                break
+            try:
+                await self.ws.send_text(msg)
+                self.consecutive_failures = 0
+            except Exception:
+                self.consecutive_failures += 1
+                if self.consecutive_failures > 5:
+                    break
+
+
+_ws_clients: dict[int, WSClient] = {}
+_ws_drain_tasks: dict[int, asyncio.Task] = {}
 
 
 async def _broadcast_trace(step: TraceStep) -> None:
-    """Send a trace step to all connected WebSocket clients."""
-    global _ws_clients
+    """Send a trace step to all connected WebSocket clients (non-blocking)."""
     data = step.model_dump()
     data["timestamp"] = step.timestamp
     msg = json.dumps({"type": "trace", "data": data})
-    dead = set()
-    for ws in _ws_clients:
-        try:
-            await ws.send_text(msg)
-        except Exception:
-            dead.add(ws)
-    _ws_clients -= dead
+    dead = []
+    for cid, client in _ws_clients.items():
+        ok = await client.send(msg)
+        if not ok and client.consecutive_failures > 10:
+            dead.append(cid)
+    for cid in dead:
+        _remove_ws_client(cid)
 
 
 async def _broadcast_dag(dag_data: dict) -> None:
-    """Send a DAG snapshot to all connected WebSocket clients."""
-    global _ws_clients
+    """Send a DAG snapshot to all connected WebSocket clients (non-blocking)."""
     msg = json.dumps({"type": "dag_update", "data": dag_data})
-    dead = set()
-    for ws in _ws_clients:
+    dead = []
+    for cid, client in _ws_clients.items():
+        ok = await client.send(msg)
+        if not ok and client.consecutive_failures > 10:
+            dead.append(cid)
+    for cid in dead:
+        _remove_ws_client(cid)
+
+
+def _remove_ws_client(cid: int) -> None:
+    """Clean up a WebSocket client."""
+    client = _ws_clients.pop(cid, None)
+    task = _ws_drain_tasks.pop(cid, None)
+    if task and not task.done():
+        task.cancel()
+    if client:
         try:
-            await ws.send_text(msg)
-        except Exception:
-            dead.add(ws)
-    _ws_clients -= dead
+            client.queue.put_nowait(None)  # Signal drain to stop
+        except asyncio.QueueFull:
+            pass
 
 
 def _serialize_dag(dag) -> dict:
@@ -308,60 +362,81 @@ async def chat(req: ChatRequest):
     conv_config = agent_app.config.conversation
     session_id = req.session_id or str(uuid.uuid4())[:8]
 
-    # Retrieve prior conversation history from persistent store
-    history = list(store.get_session_history(session_id))
+    # Concurrency limiting: queue requests when too many are in-flight
+    async with _chat_semaphore:
+        # Retrieve prior conversation history from persistent store
+        history = list(store.get_session_history(session_id))
 
-    # Track trace steps for this request
-    start_idx = len(agent_app.trace.steps)
-    start = time.time()
+        # Track trace steps for this request
+        start_idx = len(agent_app.trace.steps)
+        start = time.time()
 
-    try:
-        response = await agent_app.run(req.message, conversation_history=history, images=req.images)
-    except Exception as e:
-        err_str = str(e)
-        if "AuthenticationError" in type(e).__name__ or ("Missing" in err_str and "API Key" in err_str):
-            # Provide a helpful hint about configuring API keys
-            model_strong = agent_app.config.models.strong
-            model_fast = agent_app.config.models.fast
-            response = (
-                f"Error: {type(e).__name__}: {e}\n\n"
-                f"Hint: Your current models are strong={model_strong}, fast={model_fast}. "
-                f"Please ensure you have saved the correct API key for your chosen provider "
-                f"in the Config page, or change the model tier to a provider you have configured."
+        try:
+            # Wrap orchestrator call in a timeout to prevent indefinite hangs
+            response = await asyncio.wait_for(
+                agent_app.run(req.message, conversation_history=history, images=req.images),
+                timeout=_CHAT_REQUEST_TIMEOUT,
             )
-        else:
-            response = f"Error: {type(e).__name__}: {e}"
+        except asyncio.TimeoutError:
+            response = (
+                f"Request timed out after {_CHAT_REQUEST_TIMEOUT}s. "
+                "The request was too complex or the model took too long to respond. "
+                "Try breaking it into smaller parts."
+            )
+        except Exception as e:
+            err_str = str(e)
+            if "AuthenticationError" in type(e).__name__ or ("Missing" in err_str and "API Key" in err_str):
+                model_strong = agent_app.config.models.strong
+                model_fast = agent_app.config.models.fast
+                response = (
+                    f"Error: {type(e).__name__}: {e}\n\n"
+                    f"Hint: Your current models are strong={model_strong}, fast={model_fast}. "
+                    f"Please ensure you have saved the correct API key for your chosen provider "
+                    f"in the Config page, or change the model tier to a provider you have configured."
+                )
+            else:
+                response = f"Error: {type(e).__name__}: {e}"
 
-    # Persist this exchange in session history
-    history.append({"role": "user", "content": req.message})
-    history.append({"role": "assistant", "content": response})
+        # Persist this exchange in session history
+        history.append({"role": "user", "content": req.message})
+        history.append({"role": "assistant", "content": response})
 
-    # Compress if enabled and threshold exceeded
-    turn_count = len(history) // 2
-    if conv_config.compression_enabled and turn_count > conv_config.compression_threshold:
-        history = await _compress_history(agent_app, session_id, history)
+        # Compress if enabled and threshold exceeded
+        turn_count = len(history) // 2
+        if conv_config.compression_enabled and turn_count > conv_config.compression_threshold:
+            history = await _compress_history(agent_app, session_id, history)
 
-    # Hard cap: trim to max_history_turns
-    max_entries = conv_config.max_history_turns * 2
-    if len(history) > max_entries:
-        history = history[-max_entries:]
+        # Hard cap: trim to max_history_turns (with warning at 80%)
+        max_entries = conv_config.max_history_turns * 2
+        warn_entries = int(max_entries * 0.8)
+        if len(history) > max_entries:
+            history = history[-max_entries:]
 
-    store.save_session_history(
-        session_id, history,
-        summary=store.get_session_summary(session_id),
-    )
+        store.save_session_history(
+            session_id, history,
+            summary=store.get_session_summary(session_id),
+        )
 
-    duration_ms = (time.time() - start) * 1000
-    new_steps = agent_app.trace.steps[start_idx:]
+        duration_ms = (time.time() - start) * 1000
+        new_steps = agent_app.trace.steps[start_idx:]
 
-    return ChatResponse(
-        response=response,
-        session_id=session_id,
-        trace_steps=[s.model_dump() for s in new_steps],
-        duration_ms=duration_ms,
-        context_turns=len(history) // 2,
-        max_context_turns=conv_config.max_history_turns,
-    )
+        result = ChatResponse(
+            response=response,
+            session_id=session_id,
+            trace_steps=[s.model_dump() for s in new_steps],
+            duration_ms=duration_ms,
+            context_turns=len(history) // 2,
+            max_context_turns=conv_config.max_history_turns,
+        )
+
+        # Append context warning if approaching the limit
+        if len(history) >= warn_entries:
+            result.response += (
+                f"\n\n---\n*Context usage: {len(history) // 2}/{conv_config.max_history_turns} turns. "
+                "Consider starting a new session to avoid context truncation.*"
+            )
+
+        return result
 
 
 # --- Chat persistence CRUD endpoints ---
@@ -484,13 +559,19 @@ async def get_skills():
     ]
 
 
+_MAX_SKILL_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+
+
 @app.post("/api/skills/upload")
 async def upload_skill(file: UploadFile):
     """Upload a skill zip file to install a new skill (or update an existing one)."""
     agent_app = get_app()
     if not file.filename or not file.filename.endswith(".zip"):
         return {"error": "File must be a .zip archive"}, 400
-    data = await file.read()
+    # Read with size limit to prevent OOM on large uploads
+    data = await file.read(_MAX_SKILL_UPLOAD_BYTES + 1)
+    if len(data) > _MAX_SKILL_UPLOAD_BYTES:
+        return {"error": f"File too large (max {_MAX_SKILL_UPLOAD_BYTES // 1024 // 1024} MB)"}, 400
     try:
         skill = agent_app.skills.install_from_zip(data)
     except ValueError as e:
@@ -1416,15 +1497,18 @@ async def learning_insights(task_type: str, limit: int = 5):
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
-    _ws_clients.add(ws)
+    cid = id(ws)
+    client = WSClient(ws)
+    _ws_clients[cid] = client
+    # Start a drain task for this client's message queue
+    _ws_drain_tasks[cid] = asyncio.create_task(client.drain())
     try:
         while True:
-            # Keep connection alive; client can send pings
             data = await ws.receive_text()
             if data == "ping":
                 await ws.send_text(json.dumps({"type": "pong"}))
     except WebSocketDisconnect:
-        _ws_clients.discard(ws)
+        _remove_ws_client(cid)
 
 
 # --- Serve frontend static files ---

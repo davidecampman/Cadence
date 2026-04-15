@@ -58,9 +58,11 @@ ROLES = {
         name="coder",
         description=(
             "You write, modify, and debug code. You can execute code to test it. "
-            "You write clean, correct, minimal code."
+            "You write clean, correct, minimal code. Use edit_file or apply_diff for "
+            "precise modifications instead of rewriting entire files."
         ),
-        allowed_tools=["read_file", "write_file", "list_files", "search_files",
+        allowed_tools=["read_file", "write_file", "edit_file", "apply_diff", "file_diff",
+                        "list_files", "search_files", "grep",
                         "execute_code", "shell", "memory_query", "memory_save"],
         permission_tier=PermissionTier.PRIVILEGED,
     ),
@@ -70,7 +72,8 @@ ROLES = {
             "You review code and task outputs for correctness, security issues, and quality. "
             "You provide specific, actionable feedback."
         ),
-        allowed_tools=["read_file", "list_files", "search_files", "execute_code", "memory_query"],
+        allowed_tools=["read_file", "list_files", "search_files", "grep", "file_diff",
+                        "execute_code", "memory_query"],
     ),
     "general": AgentRole(
         name="general",
@@ -521,12 +524,58 @@ class Orchestrator:
             + "\n\n"
         )
 
+    def _is_simple_request(self, request: str) -> bool:
+        """Heuristic check: does this request need decomposition or can it go direct?
+
+        Simple requests are short, single-intent queries that don't need planning.
+        """
+        # Very short requests are almost always simple
+        if len(request) < 200:
+            simple_indicators = (
+                "what is", "what's", "how do", "explain", "show me",
+                "fix this", "fix the", "add a", "change the", "update the",
+                "remove the", "delete the", "rename", "refactor",
+                "why does", "why is", "can you", "help me",
+                "list", "find", "search", "read", "write",
+            )
+            request_lower = request.lower().strip()
+            if any(request_lower.startswith(ind) for ind in simple_indicators):
+                return True
+
+        # Multi-step indicators suggest decomposition is needed
+        complex_indicators = (
+            " and then ", " after that ", " followed by ", "step 1",
+            "step 2", "multiple", "several", "first,", "second,",
+            "1.", "2.", "3.", " also ", " additionally ",
+        )
+        request_lower = request.lower()
+        if any(ind in request_lower for ind in complex_indicators):
+            return False
+
+        # Default: short requests are simple
+        return len(request) < 500
+
     async def _plan(self, request: str) -> list[Task] | CollaborationResult:
-        """Use the fast model to decompose a request into tasks or select a collaboration mode."""
+        """Use the fast model to decompose a request into tasks or select a collaboration mode.
+
+        Includes a direct-execution fast path for simple requests and iterative
+        plan validation with complexity analysis.
+        """
+        # Fast path: skip planning entirely for simple requests
+        if self._is_simple_request(request):
+            self.trace.thought("orchestrator", "Simple request — direct execution (fast path)")
+            return []
+
         history_block = self._format_history_block()
+
+        # Include budget/time constraints to discourage over-decomposition
+        budget_remaining = self.config.budget.max_tokens_per_session - self._session_tokens
         planning_prompt = (
             "You are a task planner. Given a user request, decide if it needs to be broken "
             "into subtasks. If it's simple enough for one agent, return SIMPLE.\n\n"
+            f"BUDGET CONSTRAINT: You have ~{budget_remaining:,} tokens remaining. "
+            "Prefer 2-5 focused tasks over many micro-tasks. Each task costs ~5-20K tokens. "
+            "Only decompose when genuinely parallel or specialist work is needed.\n\n"
             "If it needs decomposition, return a JSON array of tasks:\n"
             '[\n  {"description": "...", "role": "researcher|coder|reviewer|general", '
             '"dependencies": []},\n  ...\n]\n\n'
@@ -558,112 +607,165 @@ class Orchestrator:
             f"User request: {request}"
         )
 
-        text, _, usage = await chat_completion(
-            model=self.config.models.fast,
-            messages=[Message(role=Role.USER, content=planning_prompt)],
-            temperature=0.3,
-            max_tokens=1024,
-            bedrock_config=self.config.models.bedrock if self.config.models.bedrock.enabled else None,
-            local_config=self.config.models.local if self.config.models.local.enabled else None,
-        )
-        self._session_tokens += usage.get("total_tokens", 0)
+        # Iterative planning: try up to 2 attempts with validation
+        max_planning_attempts = 2
+        last_parse_error = ""
 
-        if "SIMPLE" in text.upper():
-            return []
+        for attempt in range(max_planning_attempts):
+            prompt = planning_prompt
+            if attempt > 0 and last_parse_error:
+                prompt += (
+                    f"\n\n[RETRY: Previous plan was invalid: {last_parse_error}. "
+                    "Please fix and return valid JSON.]"
+                )
 
-        # Parse task list from LLM response
-        import json
-        import re
-
-        # Check for collaboration mode response
-        collab_match = re.search(r"\{[^}]*\"collaboration\"[^}]*\}", text, re.DOTALL)
-        if collab_match:
-            try:
-                collab_def = json.loads(collab_match.group())
-                mode_str = collab_def.get("collaboration", "")
-                if mode_str in ("debate", "peer_review", "consensus"):
-                    self.trace.thought(
-                        "orchestrator",
-                        f"Planner selected collaboration mode: {mode_str}",
-                    )
-                    # Strip learning context suffix to get the raw request
-                    raw_request = request.split("\n[Learning from past tasks")[0]
-                    return await self.collaboration.run(
-                        mode=CollaborationMode(mode_str),
-                        task=raw_request,
-                        max_rounds=collab_def.get("max_rounds", 3),
-                        num_proposers=collab_def.get("num_proposers", 3),
-                        conversation_history=self._conversation_history,
-                    )
-            except (json.JSONDecodeError, ValueError):
-                pass  # Not a valid collaboration spec — fall through to task parsing
-
-        # Extract JSON from response (may be wrapped in markdown)
-        json_match = re.search(r"\[.*\]", text, re.DOTALL)
-        if not json_match:
-            return []
-
-        try:
-            task_defs = json.loads(json_match.group())
-        except json.JSONDecodeError:
-            return []
-
-        tasks: list[Task] = []
-        for i, td in enumerate(task_defs):
-            task = Task(
-                description=td.get("description", f"Task {i}"),
-                metadata={"role": td.get("role", "general")},
+            text, _, usage = await chat_completion(
+                model=self.config.models.fast,
+                messages=[Message(role=Role.USER, content=prompt)],
+                temperature=0.3,
+                max_tokens=1024,
+                bedrock_config=self.config.models.bedrock if self.config.models.bedrock.enabled else None,
+                local_config=self.config.models.local if self.config.models.local.enabled else None,
             )
-            tasks.append(task)
+            self._session_tokens += usage.get("total_tokens", 0)
 
-        # Resolve dependency indices to task IDs
-        for i, td in enumerate(task_defs):
-            dep_indices = td.get("dependencies", [])
-            for idx in dep_indices:
-                if 0 <= idx < len(tasks) and idx != i:
-                    tasks[i].dependencies.append(tasks[idx].id)
+            if "SIMPLE" in text.upper():
+                return []
 
-        # Resolve conditional branching metadata
-        for i, td in enumerate(task_defs):
-            cond = td.get("conditional")
-            if cond and isinstance(cond, dict):
-                # Resolve branch indices to task IDs
-                if_true_ids = []
-                for idx in cond.get("if_true_indices", []):
-                    if 0 <= idx < len(tasks):
-                        if_true_ids.append(tasks[idx].id)
-                if_false_ids = []
-                for idx in cond.get("if_false_indices", []):
-                    if 0 <= idx < len(tasks):
-                        if_false_ids.append(tasks[idx].id)
+            import json
+            import re
 
-                # The condition source is the first dependency
-                condition_source = tasks[i].dependencies[0] if tasks[i].dependencies else ""
+            # Check for collaboration mode response
+            collab_match = re.search(r"\{[^}]*\"collaboration\"[^}]*\}", text, re.DOTALL)
+            if collab_match:
+                try:
+                    collab_def = json.loads(collab_match.group())
+                    mode_str = collab_def.get("collaboration", "")
+                    if mode_str in ("debate", "peer_review", "consensus"):
+                        self.trace.thought(
+                            "orchestrator",
+                            f"Planner selected collaboration mode: {mode_str}",
+                        )
+                        raw_request = request.split("\n[Learning from past tasks")[0]
+                        return await self.collaboration.run(
+                            mode=CollaborationMode(mode_str),
+                            task=raw_request,
+                            max_rounds=collab_def.get("max_rounds", 3),
+                            num_proposers=collab_def.get("num_proposers", 3),
+                            conversation_history=self._conversation_history,
+                        )
+                except (json.JSONDecodeError, ValueError):
+                    pass
 
-                tasks[i].metadata["conditional"] = {
-                    "condition_source": condition_source,
-                    "condition_type": cond.get("condition_type", "llm_judge"),
-                    "condition_value": cond.get("condition_value", ""),
-                    "if_true": if_true_ids,
-                    "if_false": if_false_ids,
-                }
+            # Extract and validate JSON
+            json_match = re.search(r"\[.*\]", text, re.DOTALL)
+            if not json_match:
+                last_parse_error = "No JSON array found in response"
+                if attempt < max_planning_attempts - 1:
+                    continue
+                return []
 
-            # Resolve loop metadata
-            loop = td.get("loop")
-            if loop and isinstance(loop, dict):
-                loop_task_ids = []
-                for idx in loop.get("loop_task_indices", []):
-                    if 0 <= idx < len(tasks):
-                        loop_task_ids.append(tasks[idx].id)
+            try:
+                task_defs = json.loads(json_match.group())
+            except json.JSONDecodeError as e:
+                last_parse_error = f"Invalid JSON: {e}"
+                if attempt < max_planning_attempts - 1:
+                    continue
+                return []
 
-                tasks[i].metadata["loop"] = {
-                    "max_iterations": loop.get("max_iterations", 3),
-                    "condition_type": loop.get("condition_type", "llm_judge"),
-                    "condition_value": loop.get("condition_value", ""),
-                    "loop_task_ids": loop_task_ids,
-                }
+            # Validate task structure
+            if not isinstance(task_defs, list):
+                last_parse_error = "Expected a JSON array of tasks"
+                if attempt < max_planning_attempts - 1:
+                    continue
+                return []
 
-        return tasks
+            # Complexity check: refuse over-decomposed plans
+            max_tasks = 10
+            if len(task_defs) > max_tasks:
+                self.trace.thought(
+                    "orchestrator",
+                    f"Plan has {len(task_defs)} tasks (max {max_tasks}) — requesting simplification",
+                )
+                last_parse_error = f"Too many tasks ({len(task_defs)}). Simplify to at most {max_tasks} tasks."
+                if attempt < max_planning_attempts - 1:
+                    continue
+                # Truncate to max
+                task_defs = task_defs[:max_tasks]
+
+            # Validate dependencies (check for cycles and out-of-range refs)
+            valid = True
+            for i, td in enumerate(task_defs):
+                deps = td.get("dependencies", [])
+                for dep in deps:
+                    if not isinstance(dep, int) or dep < 0 or dep >= len(task_defs) or dep == i:
+                        last_parse_error = f"Task {i} has invalid dependency: {dep}"
+                        valid = False
+                        break
+                if not valid:
+                    break
+
+            if not valid and attempt < max_planning_attempts - 1:
+                continue
+
+            # Build task objects
+            tasks: list[Task] = []
+            for i, td in enumerate(task_defs):
+                task = Task(
+                    description=td.get("description", f"Task {i}"),
+                    metadata={"role": td.get("role", "general")},
+                )
+                tasks.append(task)
+
+            # Resolve dependency indices to task IDs
+            for i, td in enumerate(task_defs):
+                dep_indices = td.get("dependencies", [])
+                for idx in dep_indices:
+                    if 0 <= idx < len(tasks) and idx != i:
+                        tasks[i].dependencies.append(tasks[idx].id)
+
+            # Resolve conditional branching metadata
+            for i, td in enumerate(task_defs):
+                cond = td.get("conditional")
+                if cond and isinstance(cond, dict):
+                    if_true_ids = []
+                    for idx in cond.get("if_true_indices", []):
+                        if 0 <= idx < len(tasks):
+                            if_true_ids.append(tasks[idx].id)
+                    if_false_ids = []
+                    for idx in cond.get("if_false_indices", []):
+                        if 0 <= idx < len(tasks):
+                            if_false_ids.append(tasks[idx].id)
+
+                    condition_source = tasks[i].dependencies[0] if tasks[i].dependencies else ""
+
+                    tasks[i].metadata["conditional"] = {
+                        "condition_source": condition_source,
+                        "condition_type": cond.get("condition_type", "llm_judge"),
+                        "condition_value": cond.get("condition_value", ""),
+                        "if_true": if_true_ids,
+                        "if_false": if_false_ids,
+                    }
+
+                loop = td.get("loop")
+                if loop and isinstance(loop, dict):
+                    loop_task_ids = []
+                    for idx in loop.get("loop_task_indices", []):
+                        if 0 <= idx < len(tasks):
+                            loop_task_ids.append(tasks[idx].id)
+
+                    tasks[i].metadata["loop"] = {
+                        "max_iterations": loop.get("max_iterations", 3),
+                        "condition_type": loop.get("condition_type", "llm_judge"),
+                        "condition_value": loop.get("condition_value", ""),
+                        "loop_task_ids": loop_task_ids,
+                    }
+
+            return tasks
+
+        # All planning attempts failed
+        self.trace.thought("orchestrator", f"Planning failed after {max_planning_attempts} attempts — using direct execution")
+        return []
 
     async def _llm_judge(self, result_text: str, condition: str) -> bool:
         """Ask the fast model whether *result_text* satisfies *condition*."""
@@ -752,13 +854,27 @@ class Orchestrator:
             self._session_tokens += agent._total_tokens
 
     async def _synthesize(self, request: str, results: dict[str, str]) -> str:
-        """Combine task results into a coherent final response."""
+        """Combine task results into a coherent final response.
+
+        Uses the fast model for straightforward synthesis (non-conflicting results)
+        and the strong model when results are complex or potentially conflicting.
+        """
         if len(results) == 1:
             return next(iter(results.values()))
 
         result_block = "\n\n".join(
             f"### Task Result\n{text}" for text in results.values()
         )
+
+        # Determine if results are simple enough for fast model synthesis
+        total_result_len = sum(len(v) for v in results.values())
+        has_failures = any(
+            t.status == TaskStatus.FAILED for t in self.dag._tasks.values()
+        )
+        # Use fast model for simple concatenation-style synthesis
+        use_fast = total_result_len < 5000 and not has_failures and len(results) <= 3
+        synth_model = self.config.models.fast if use_fast else self.config.models.strong
+
         history_block = self._format_history_block()
         synthesis_prompt = (
             f"{history_block}"
@@ -769,7 +885,7 @@ class Orchestrator:
         )
 
         text, _, usage = await chat_completion(
-            model=self.config.models.strong,
+            model=synth_model,
             messages=[Message(role=Role.USER, content=synthesis_prompt)],
             temperature=0.5,
             bedrock_config=self.config.models.bedrock if self.config.models.bedrock.enabled else None,
