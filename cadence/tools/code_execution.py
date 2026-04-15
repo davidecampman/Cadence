@@ -141,6 +141,26 @@ def _format_output(
     return "\n".join(parts).strip() or "(no output)"
 
 
+def _snapshot_directory(directory: str) -> set[str]:
+    """Return a set of absolute file paths currently in *directory* (non-recursive, top-level only)."""
+    try:
+        return {
+            os.path.join(directory, name)
+            for name in os.listdir(directory)
+            if os.path.isfile(os.path.join(directory, name))
+        }
+    except OSError:
+        return set()
+
+
+def _detect_new_files(directory: str, before: set[str]) -> list[str]:
+    """Return sorted list of new file paths created in *directory* since *before* snapshot."""
+    after = _snapshot_directory(directory)
+    new = sorted(after - before)
+    # Only include real user-created files, not temp files from the runtime
+    return [f for f in new if not os.path.basename(f).startswith(".")]
+
+
 class CodeExecutionTool(Tool):
     name = "execute_code"
     description = (
@@ -190,6 +210,12 @@ class CodeExecutionTool(Tool):
         # Apply sandboxing
         sandboxed = _wrap_with_sandbox(raw_command, cfg)
 
+        work_dir = tempfile.gettempdir()
+
+        # Snapshot files in the working directory before execution so we can
+        # detect any new files created by the code and emit [[FILE:...]] markers.
+        files_before = _snapshot_directory(work_dir)
+
         start_time = time.monotonic()
 
         try:
@@ -197,14 +223,14 @@ class CodeExecutionTool(Tool):
                 sandboxed,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=tempfile.gettempdir(),
+                cwd=work_dir,
             )
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(),
                 timeout=effective_timeout,
             )
             duration_ms = (time.monotonic() - start_time) * 1000
-            return _format_output(
+            output = _format_output(
                 stdout, stderr, proc.returncode,
                 cfg.max_output_bytes, duration_ms,
             )
@@ -214,11 +240,19 @@ class CodeExecutionTool(Tool):
             stdout, stderr, reason = await _graceful_terminate(
                 proc, b"", b"", effective_timeout,
             )
-            return _format_output(
+            output = _format_output(
                 stdout, stderr, None,
                 cfg.max_output_bytes, duration_ms,
                 termination_reason=reason,
             )
+
+        # Append [[FILE:...]] markers for any new files created during execution
+        new_files = _detect_new_files(work_dir, files_before)
+        if new_files:
+            markers = "\n".join(f"[[FILE:{f}]]" for f in new_files)
+            output = output + "\n" + markers
+
+        return output
 
 
 class ShellTool(Tool):
