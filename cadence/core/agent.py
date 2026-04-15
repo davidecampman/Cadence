@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from difflib import SequenceMatcher
 from typing import Any
@@ -122,6 +123,38 @@ class Agent:
             + f"\n\n... [truncated {len(text) - keep_head - keep_tail:,} chars] ...\n\n"
             + text[-keep_tail:]
         )
+
+    # Regex for [[FILE:/path]] markers embedded in tool results
+    _FILE_MARKER_RE = re.compile(r"\[\[FILE:(.*?)\]\]")
+
+    def _collect_file_markers(self, response: str) -> str:
+        """Ensure all [[FILE:...]] markers from tool results appear in the response.
+
+        The LLM often omits the raw ``[[FILE:...]]`` markers when composing its
+        final answer, which causes the frontend to render broken download links
+        (or no links at all).  This method scans the conversation history for
+        markers emitted by tools such as ``write_file`` and ``execute_code``,
+        and appends any that are missing from *response* so the UI can always
+        render proper download buttons.
+        """
+        # Gather every marker present in tool-result messages
+        tool_markers: list[str] = []
+        for msg in self._history:
+            if msg.role == Role.TOOL and msg.content:
+                for match in self._FILE_MARKER_RE.finditer(msg.content):
+                    marker = match.group(0)  # e.g. [[FILE:/tmp/hello.zip]]
+                    if marker not in tool_markers:
+                        tool_markers.append(marker)
+
+        if not tool_markers:
+            return response
+
+        # Only append markers the LLM forgot to include
+        missing = [m for m in tool_markers if m not in response]
+        if not missing:
+            return response
+
+        return response + "\n\n" + "\n".join(missing)
 
     def _prune_history(self) -> None:
         """Shrink older messages when history grows too large.
@@ -303,7 +336,7 @@ class Agent:
                     self._last_assistant_text() or "(no output yet)"
                 )
                 await self._maybe_reflect(task, result, max_iter)
-                return result
+                return self._collect_file_markers(result)
 
             # Budget check — hard stop if exceeded
             if self._total_tokens >= self.config.budget.max_tokens_per_task:
@@ -313,7 +346,7 @@ class Agent:
                     self._last_assistant_text() or "(no output yet)"
                 )
                 await self._maybe_reflect(task, result, max_iter)
-                return result
+                return self._collect_file_markers(result)
 
             # Proactive budget check — if approaching the limit, do one final
             # toolless LLM call to produce a summary rather than blowing the budget.
@@ -351,7 +384,7 @@ class Agent:
                     self._history.append(Message(role=Role.ASSISTANT, content=text))
                     self.trace.result(self.id, f"Budget-limited response ({self._iterations} iterations)")
                     await self._maybe_reflect(task, text, max_iter)
-                    return text
+                    return self._collect_file_markers(text)
 
             # Get available tool definitions for this agent's permission tier
             tool_defs = scoped_tools.definitions(
@@ -375,7 +408,7 @@ class Agent:
                 self._history.append(Message(role=Role.ASSISTANT, content=text))
                 self.trace.result(self.id, f"Final response ({self._iterations} iterations)")
                 await self._maybe_reflect(task, text, max_iter)
-                return text
+                return self._collect_file_markers(text)
 
             # Record assistant message with tool calls
             self._history.append(Message(
@@ -416,7 +449,7 @@ class Agent:
             self._last_assistant_text() or "(no output)"
         )
         await self._maybe_reflect(task, result, max_iter)
-        return result
+        return self._collect_file_markers(result)
 
     async def _maybe_reflect(self, task: str, result: str, max_iter: int) -> None:
         """Trigger prompt self-reflection if evolution is enabled."""
@@ -512,14 +545,14 @@ class Agent:
                     self._last_assistant_text() or "(no output yet)"
                 )
                 await self._maybe_reflect(task, result, max_iter)
-                return result
+                return self._collect_file_markers(result)
 
             if self._total_tokens >= self.config.budget.max_tokens_per_task:
                 result = "Token budget exceeded. Partial result:\n" + (
                     self._last_assistant_text() or "(no output yet)"
                 )
                 await self._maybe_reflect(task, result, max_iter)
-                return result
+                return self._collect_file_markers(result)
 
             tool_defs = scoped_tools.definitions(
                 max_tier=self.role.permission_tier,
@@ -561,7 +594,7 @@ class Agent:
                 self._history.append(Message(role=Role.ASSISTANT, content=text))
                 self.trace.result(self.id, f"Final response ({self._iterations} iterations)")
                 await self._maybe_reflect(task, text, max_iter)
-                return text
+                return self._collect_file_markers(text)
 
             self._history.append(Message(role=Role.ASSISTANT, content=text, tool_calls=tool_calls))
 
@@ -590,7 +623,7 @@ class Agent:
             self._last_assistant_text() or "(no output)"
         )
         await self._maybe_reflect(task, result, max_iter)
-        return result
+        return self._collect_file_markers(result)
 
 
 def _summarize_args(args: dict[str, Any], max_len: int = 80) -> str:

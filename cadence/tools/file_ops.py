@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import difflib
 import glob as glob_mod
 import os
@@ -76,6 +77,43 @@ class WriteFileTool(Tool):
         abs_path = str(p.resolve())
         return (
             f"Wrote {len(content)} bytes to {path}\n"
+            f"[[FILE:{abs_path}]]"
+        )
+
+
+class WriteBinaryFileTool(Tool):
+    name = "write_binary_file"
+    description = (
+        "Write binary content to a file using base64 encoding. "
+        "Use this for non-text files like ZIP archives, images, PDFs, etc. "
+        "The content must be base64-encoded. Creates parent directories as needed."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Path to write to."},
+            "content_base64": {
+                "type": "string",
+                "description": "Base64-encoded binary content to write.",
+            },
+        },
+        "required": ["path", "content_base64"],
+    }
+    permission_tier = PermissionTier.STANDARD
+
+    async def execute(self, path: str, content_base64: str) -> str:
+        p = Path(path).expanduser()
+        if not _is_write_safe(p):
+            return f"Write blocked: path resolves inside a protected system directory ({p.resolve()})"
+        try:
+            data = base64.b64decode(content_base64)
+        except Exception as e:
+            return f"Invalid base64 content: {e}"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(data)
+        abs_path = str(p.resolve())
+        return (
+            f"Wrote {len(data)} bytes (binary) to {path}\n"
             f"[[FILE:{abs_path}]]"
         )
 
