@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import Callable
 
 from cadence.core.types import TraceStep
 
@@ -18,6 +19,7 @@ class TraceLogger:
         self._file_path = Path(trace_file) if trace_file else None
         self._console = console
         self._steps: list[TraceStep] = []
+        self._listeners: list[Callable[[TraceStep], None]] = []
 
         if self._file_path:
             self._file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -34,6 +36,24 @@ class TraceLogger:
 
         if self._console:
             _print_step(step)
+
+        for listener in list(self._listeners):
+            try:
+                listener(step)
+            except Exception:
+                logger.debug("Trace listener failed", exc_info=True)
+
+    def add_listener(self, listener: Callable[[TraceStep], None]) -> None:
+        """Call *listener* after each newly logged step."""
+        self._listeners.append(listener)
+
+    def clear_listeners(self) -> None:
+        """Remove all trace listeners."""
+        self._listeners.clear()
+
+    def capture(self, step: TraceStep) -> None:
+        """Append an existing step to the in-memory trace without side effects."""
+        self._steps.append(step)
 
     def observation(self, agent_id: str, content: str, task_id: str | None = None, **meta):
         self.log(TraceStep(

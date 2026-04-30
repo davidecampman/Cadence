@@ -92,6 +92,12 @@ class ToolRegistry:
     def names(self) -> list[str]:
         return list(self._tools.keys())
 
+    def copy(self) -> "ToolRegistry":
+        """Return a shallow copy of this registry."""
+        registry = ToolRegistry()
+        registry._tools = dict(self._tools)
+        return registry
+
     def scoped_copy(self, agent_id: str) -> "ToolRegistry":
         """Return a shallow copy with memory tools scoped to the given agent.
 

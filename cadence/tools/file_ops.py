@@ -13,13 +13,21 @@ from cadence.core.types import PermissionTier
 from cadence.tools.base import Tool
 
 # Sensitive paths that file tools should never write to.
-_SENSITIVE_PATHS = {"/etc", "/usr", "/bin", "/sbin", "/boot", "/var", "/root", "/proc", "/sys"}
+_SENSITIVE_PATHS = {
+    "/etc", "/private/etc", "/usr", "/bin", "/sbin",
+    "/boot", "/var", "/root", "/proc", "/sys",
+}
 
 
 def _is_write_safe(p: Path) -> bool:
     """Return True if *p* is not inside a sensitive system directory."""
+    original = str(p.expanduser().absolute())
     resolved = str(p.resolve())
-    return not any(resolved == s or resolved.startswith(s + "/") for s in _SENSITIVE_PATHS)
+    return not any(
+        candidate == s or candidate.startswith(s + "/")
+        for candidate in (original, resolved)
+        for s in _SENSITIVE_PATHS
+    )
 
 
 class ReadFileTool(Tool):

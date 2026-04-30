@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import {
   sendMessageStream,
+  cancelChat as apiCancelChat,
   fetchConfig,
   updateConfig,
   fetchTools,
@@ -61,6 +62,10 @@ interface Chat {
   sessionId?: string;
   createdAt: number;
 }
+
+const EMPTY_MESSAGES: ChatMessage[] = [];
+const ACCEPTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
 
 function loadChatsFromLocalStorage(): Chat[] {
   try {
@@ -162,7 +167,7 @@ function App() {
     const saved = loadChatsFromLocalStorage();
     return saved.length > 0 ? saved[0].id : null;
   });
-  const [_backendReady, setBackendReady] = useState(false);
+  const [, setBackendReady] = useState(false);
   const [input, setInput] = useState('');
   // Per-chat loading: tracks which chat IDs are currently processing
   const [loadingChats, setLoadingChats] = useState<Set<string>>(new Set());
@@ -243,7 +248,8 @@ function App() {
 
   // Derived: active chat and its messages
   const activeChat = chats.find((c) => c.id === activeChatId) ?? null;
-  const messages = activeChat?.messages ?? [];
+  const activeSessionId = activeChat?.sessionId ?? activeChatId;
+  const messages = activeChat?.messages ?? EMPTY_MESSAGES;
   // loading is true only for the currently-visible chat
   const loading = activeChatId ? loadingChats.has(activeChatId) : false;
 
@@ -300,13 +306,15 @@ function App() {
       }
     })();
     return () => { cancelled = true; };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   const createNewChat = useCallback(() => {
+    const id = crypto.randomUUID();
     const newChat: Chat = {
-      id: crypto.randomUUID(),
+      id,
       title: 'New Chat',
       messages: [],
+      sessionId: id,
       createdAt: Date.now(),
     };
     setChats((prev) => [newChat, ...prev]);
@@ -314,7 +322,9 @@ function App() {
     setView('chat');
     setInput('');
     // Persist to backend
-    apiCreateChat(newChat.id, newChat.title, newChat.createdAt / 1000).catch(() => {});
+    apiCreateChat(newChat.id, newChat.title, newChat.createdAt / 1000)
+      .then(() => apiUpdateChat(newChat.id, { session_id: newChat.sessionId }))
+      .catch(() => {});
   }, []);
 
   const deleteChat = useCallback((chatId: string) => {
@@ -382,6 +392,9 @@ function App() {
   // WebSocket for live trace + DAG updates
   useEffect(() => {
     const ws = connectWebSocket((msg: WsMessage) => {
+      if ('session_id' in msg && msg.session_id && msg.session_id !== activeSessionId) {
+        return;
+      }
       if (msg.type === 'trace') {
         setTraceSteps((prev) => [...prev, msg.data]);
       } else if (msg.type === 'dag_update') {
@@ -389,14 +402,14 @@ function App() {
       }
     });
     return () => ws.close();
-  }, []);
+  }, [activeSessionId]);
 
   // Fetch DAG snapshot whenever the user opens the graph view
   useEffect(() => {
     if (view === 'dag') {
-      fetchDag().then(setDagGraph).catch(() => {});
+      fetchDag(activeSessionId).then(setDagGraph).catch(() => {});
     }
-  }, [view]);
+  }, [view, activeSessionId]);
 
   // Auto-scroll messages
   useEffect(() => {
@@ -636,9 +649,6 @@ function App() {
   }, []);
 
   // --- File attachment helpers ---
-  const ACCEPTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
-  const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
-
   const fileToAttachment = useCallback((file: File): Promise<ImageAttachment | null> => {
     return new Promise((resolve) => {
       if (!ACCEPTED_IMAGE_TYPES.includes(file.type)) {
@@ -718,14 +728,16 @@ function App() {
 
   const handleCancel = useCallback(() => {
     if (!activeChatId) return;
+    const sessionId = activeSessionId ?? activeChatId;
     const controller = abortControllersRef.current[activeChatId];
+    apiCancelChat(sessionId).catch(() => {});
     if (controller) {
       controller.abort();
       delete abortControllersRef.current[activeChatId];
     }
     setLoadingChats((prev) => { const next = new Set(prev); next.delete(activeChatId); return next; });
     setStreamingStatus((prev) => { const next = { ...prev }; delete next[activeChatId]; return next; });
-  }, [activeChatId]);
+  }, [activeChatId, activeSessionId]);
 
   const handleSend = useCallback(async (text?: string) => {
     const msg = text || input.trim();
@@ -740,17 +752,28 @@ function App() {
 
     // If no active chat, create one
     let chatId = activeChatId;
+    let sessionId = chatId ? (chats.find((c) => c.id === chatId)?.sessionId ?? chatId) : '';
     if (!chatId) {
+      const id = crypto.randomUUID();
       const newChat: Chat = {
-        id: crypto.randomUUID(),
+        id,
         title: 'New Chat',
         messages: [],
+        sessionId: id,
         createdAt: Date.now(),
       };
       chatId = newChat.id;
+      sessionId = newChat.sessionId!;
       setChats((prev) => [newChat, ...prev]);
       setActiveChatId(chatId);
-      apiCreateChat(newChat.id, newChat.title, newChat.createdAt / 1000).catch(() => {});
+      apiCreateChat(newChat.id, newChat.title, newChat.createdAt / 1000)
+        .then(() => apiUpdateChat(newChat.id, { session_id: newChat.sessionId }))
+        .catch(() => {});
+    } else if (!chats.find((c) => c.id === chatId)?.sessionId) {
+      setChats((prev) =>
+        prev.map((c) => (c.id === chatId ? { ...c, sessionId } : c))
+      );
+      apiUpdateChat(chatId, { session_id: sessionId }).catch(() => {});
     }
 
     const displayContent = currentAttachments.length > 0
@@ -792,8 +815,6 @@ function App() {
       apiUpdateChat(chatId, { title: newTitle }).catch(() => {});
     }
 
-    const currentSessionId = chats.find((c) => c.id === chatId)?.sessionId;
-
     // Create an AbortController so the user can cancel
     const controller = new AbortController();
     abortControllersRef.current[chatId] = controller;
@@ -808,15 +829,15 @@ function App() {
       const res = await sendMessageStream(
         msg || 'Please look at the attached image(s).',
         {
-          onThinking: (_thought, _agentId) => {
+          onThinking: () => {
             // Thinking steps arrive via WebSocket too; use status line for live feedback
             setStreamingStatus((prev) => ({ ...prev, [chatId!]: 'Thinking...' }));
           },
-          onStatus: (status, _agentId) => {
+          onStatus: (status) => {
             setStreamingStatus((prev) => ({ ...prev, [chatId!]: status }));
           },
         },
-        currentSessionId,
+        sessionId,
         currentAttachments.length > 0 ? currentAttachments : undefined,
         controller.signal,
       );

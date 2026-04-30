@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -1372,3 +1373,40 @@ class TestOrchestratorConditionalIntegration:
             orch = Orchestrator(tool_registry=registry, trace=trace, config=config)
             result = await orch._llm_judge("2 tests failed.", "All tests pass")
             assert result is False
+
+
+class TestCadenceAppRunIsolation:
+    @pytest.mark.asyncio
+    async def test_app_run_uses_request_local_orchestrators(self, monkeypatch):
+        """Concurrent app.run calls must not share a mutable orchestrator."""
+        from cadence.app import CadenceApp
+
+        config = _make_config()
+        config.message_bus.enabled = False
+        config.checkpoints.enabled = False
+        config.learning.enabled = False
+        config.knowledge_graph.enabled = False
+        config.mcp.enabled = False
+
+        monkeypatch.setattr("cadence.app.load_config", lambda _path=None: config)
+
+        app = CadenceApp()
+        seen_orchestrators: list[int] = []
+
+        async def fake_run(self, user_request, conversation_history=None, session_id="", images=None):
+            seen_orchestrators.append(id(self))
+            self.dag.add(Task(description=f"task for {session_id}"))
+            await asyncio.sleep(0)
+            return f"{session_id}:{len(self.dag._tasks)}"
+
+        monkeypatch.setattr("cadence.agents.orchestrator.Orchestrator.run", fake_run)
+
+        first, second = await asyncio.gather(
+            app.run("first", session_id="session-a"),
+            app.run("second", session_id="session-b"),
+        )
+
+        assert first == "session-a:1"
+        assert second == "session-b:1"
+        assert len(set(seen_orchestrators)) == 2
+        assert app.orchestrator.dag._tasks == {}

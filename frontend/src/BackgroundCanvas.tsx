@@ -187,7 +187,10 @@ export default function BackgroundCanvas({ lightMode }: { lightMode: boolean }) 
     const onResize = () => resize();
     const onMouseMove = (e: MouseEvent) => { state.mouse = { x: e.clientX, y: e.clientY }; };
     const onMouseLeave = () => { state.mouse = null; };
-    const onVisChange = () => { document.hidden ? pause() : resume(); };
+    const onVisChange = () => {
+      if (document.hidden) pause();
+      else resume();
+    };
 
     window.addEventListener('resize', onResize);
     window.addEventListener('mousemove', onMouseMove);

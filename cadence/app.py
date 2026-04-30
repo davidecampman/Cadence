@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+from typing import Callable
 
 from cadence.core.config import Config, load_config
 from cadence.core.checkpoint import CheckpointManager
 from cadence.core.message_bus import MessageBus
+from cadence.core.streaming import StreamCollector
 from cadence.core.trace import TraceLogger
 from cadence.agents.orchestrator import Orchestrator
 from cadence.knowledge.graph import KnowledgeGraph
@@ -106,19 +108,11 @@ class CadenceApp:
             )
 
         self.tools = self._build_tool_registry()
-        self.orchestrator = Orchestrator(
-            tool_registry=self.tools,
-            trace=self.trace,
-            config=self.config,
-            skill_loader=self.skills,
-            prompt_evolver=self.prompt_evolver,
-            message_bus=self.message_bus,
-            checkpoint_manager=self.checkpoint_manager,
-            learning_store=self.learning_store,
-        )
+        self.orchestrator = self._new_orchestrator(self.trace)
 
-    def _build_tool_registry(self) -> ToolRegistry:
+    def _build_tool_registry(self, trace: TraceLogger | None = None) -> ToolRegistry:
         registry = ToolRegistry()
+        active_trace = trace or self.trace
 
         # File operations
         registry.register(ReadFileTool())
@@ -214,13 +208,91 @@ class CadenceApp:
         # Delegation
         registry.register(DelegateTool(
             tool_registry=registry,
-            trace=self.trace,
+            trace=active_trace,
             config=self.config,
             max_depth=self.config.agents.max_depth,
             skill_loader=self.skills,
         ))
 
         return registry
+
+    def _runtime_tool_registry(self, trace: TraceLogger) -> ToolRegistry:
+        """Return request-local tools while preserving connected MCP tools."""
+        registry = self.tools.copy()
+        registry.register(DelegateTool(
+            tool_registry=registry,
+            trace=trace,
+            config=self.config,
+            max_depth=self.config.agents.max_depth,
+            skill_loader=self.skills,
+        ))
+        return registry
+
+    def _new_orchestrator(
+        self,
+        trace: TraceLogger,
+        on_task_update: Callable | None = None,
+    ) -> Orchestrator:
+        orchestrator = Orchestrator(
+            tool_registry=self._runtime_tool_registry(trace),
+            trace=trace,
+            config=self.config,
+            skill_loader=self.skills,
+            prompt_evolver=self.prompt_evolver,
+            message_bus=self.message_bus,
+            checkpoint_manager=self.checkpoint_manager,
+            learning_store=self.learning_store,
+        )
+        orchestrator.on_task_update = on_task_update
+        return orchestrator
+
+    async def reconfigure(self, new_config: Config) -> None:
+        """Rebuild config-dependent runtime services for future requests."""
+        await self.disconnect_mcp_servers()
+        self.config = new_config
+        self.trace = TraceLogger(
+            trace_file=self.config.logging.trace_file,
+            console=self.config.logging.rich_console,
+        )
+        self.memory = MemoryStore()
+        self.knowledge = KnowledgeStore()
+        self.router = SmartRouter(self.config)
+        self.skills = SkillLoader(self.config.skills.directories)
+        if self.config.skills.auto_discover:
+            self.skills.discover()
+
+        if self.config.prompt_evolution.enabled:
+            self.prompt_evolution_store = PromptEvolutionStore(
+                db_path=self.config.prompt_evolution.persist_dir,
+            )
+            self.prompt_evolver = PromptEvolver(
+                store=self.prompt_evolution_store,
+                config=self.config,
+            )
+        else:
+            self.prompt_evolution_store = None
+            self.prompt_evolver = None
+
+        self.message_bus = MessageBus(
+            history_limit=self.config.message_bus.history_limit,
+        ) if self.config.message_bus.enabled else None
+        self.checkpoint_manager = CheckpointManager() if self.config.checkpoints.enabled else None
+        self.learning_store = LearningStore(
+            db_path=self.config.learning.persist_dir,
+        ) if self.config.learning.enabled else None
+        self.knowledge_graph = KnowledgeGraph(
+            persist_path=self.config.knowledge_graph.persist_path,
+        ) if self.config.knowledge_graph.enabled else None
+
+        self.mcp_manager = MCPManager()
+        if self.config.mcp.enabled and self.config.mcp.servers:
+            self.mcp_manager.add_servers_from_config(
+                [s.model_dump() for s in self.config.mcp.servers]
+            )
+
+        self.tools = self._build_tool_registry()
+        self.orchestrator = self._new_orchestrator(self.trace)
+        await self.connect_mcp_servers()
 
     async def connect_mcp_servers(self) -> dict[str, int]:
         """Connect to configured MCP servers and bridge their tools into the registry.
@@ -248,10 +320,39 @@ class CadenceApp:
         user_input: str,
         conversation_history: list[dict[str, str]] | None = None,
         images: list[dict] | None = None,
+        session_id: str = "",
+        trace: TraceLogger | None = None,
+        on_task_update: Callable | None = None,
     ) -> str:
         """Process a user request through the orchestrator."""
-        return await self.orchestrator.run(
-            user_input, conversation_history=conversation_history or [], images=images
+        active_trace = trace or self.trace
+        orchestrator = self._new_orchestrator(active_trace, on_task_update=on_task_update)
+        return await orchestrator.run(
+            user_input,
+            conversation_history=conversation_history or [],
+            session_id=session_id,
+            images=images,
+        )
+
+    async def run_streaming(
+        self,
+        user_input: str,
+        collector: StreamCollector,
+        conversation_history: list[dict[str, str]] | None = None,
+        images: list[dict] | None = None,
+        session_id: str = "",
+        trace: TraceLogger | None = None,
+        on_task_update: Callable | None = None,
+    ) -> str:
+        """Process a user request through a request-local streaming orchestrator."""
+        active_trace = trace or self.trace
+        orchestrator = self._new_orchestrator(active_trace, on_task_update=on_task_update)
+        return await orchestrator.run_streaming(
+            user_input,
+            collector=collector,
+            conversation_history=conversation_history or [],
+            session_id=session_id,
+            images=images,
         )
 
     def discover_skills(self) -> int:

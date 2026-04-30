@@ -23,7 +23,7 @@ _GRACEFUL_SHUTDOWN_TIMEOUT = 5
 def _build_resource_limits(cfg) -> str:
     """Build a shell preamble that enforces resource limits via ulimit."""
     lines = []
-    if cfg.max_memory_mb > 0:
+    if cfg.max_memory_mb > 0 and _IS_LINUX:
         kb = cfg.max_memory_mb * 1024
         lines.append(f"ulimit -v {kb}")
     if cfg.max_cpu_seconds > 0:

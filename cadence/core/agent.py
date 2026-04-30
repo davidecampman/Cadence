@@ -250,8 +250,8 @@ class Agent:
             return True
 
         # Check for near-duplicates using similarity ratio
-        # If all pairs within the window are >85% similar, it's a loop
-        similarity_threshold = 0.85
+        # If all pairs within the window are >98% similar, it's a loop
+        similarity_threshold = 0.98
         first = recent_assistant[0]
         all_similar = all(
             SequenceMatcher(None, first[:500], msg[:500]).ratio() > similarity_threshold

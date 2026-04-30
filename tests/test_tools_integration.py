@@ -320,7 +320,10 @@ class TestCodeExecutionHelpers:
             restrict_network = False
 
         limits = _build_resource_limits(FakeCfg())
-        assert "ulimit -v" in limits
+        if platform.system() == "Linux":
+            assert "ulimit -v" in limits
+        else:
+            assert "ulimit -v" not in limits
         assert "ulimit -t 30" in limits
         assert "ulimit -n 256" in limits
 
@@ -366,7 +369,7 @@ class TestToolRegistryIntegration:
             assert "RuntimeError" in result.output
             assert "intentional failure" in result.output
 
-        asyncio.get_event_loop().run_until_complete(_test())
+        asyncio.run(_test())
 
     def test_tool_definition(self):
         tool = ReadFileTool()
