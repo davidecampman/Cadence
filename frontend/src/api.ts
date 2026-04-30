@@ -126,10 +126,10 @@ export async function sendMessageStream(
               const chatResponse: ChatResponse = {
                 response: data.response as string ?? '',
                 session_id: data.session_id as string ?? '',
-                trace_steps: [],
+                trace_steps: (data.trace_steps as TraceStep[] | undefined) ?? [],
                 duration_ms: data.duration_ms as number ?? 0,
-                context_turns: 0,
-                max_context_turns: 50,
+                context_turns: data.context_turns as number ?? 0,
+                max_context_turns: data.max_context_turns as number ?? 50,
               };
               handlers.onDone?.(chatResponse);
               resolve(chatResponse);
@@ -498,17 +498,19 @@ export interface DagEdge {
 export interface DagGraph {
   nodes: DagNode[];
   edges: DagEdge[];
+  session_id?: string | null;
 }
 
-export async function fetchDag(): Promise<DagGraph> {
-  const res = await fetch(`${API_BASE}/dag`);
+export async function fetchDag(sessionId?: string | null): Promise<DagGraph> {
+  const params = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : '';
+  const res = await fetch(`${API_BASE}/dag${params}`);
   if (!res.ok) throw new Error(`DAG fetch failed: ${res.status}`);
   return res.json();
 }
 
 export type WsMessage =
-  | { type: 'trace'; data: TraceStep }
-  | { type: 'dag_update'; data: DagGraph }
+  | { type: 'trace'; data: TraceStep; session_id?: string | null }
+  | { type: 'dag_update'; data: DagGraph; session_id?: string | null }
   | { type: 'pong' };
 
 export function connectWebSocket(onMessage: (msg: WsMessage) => void): WebSocket {

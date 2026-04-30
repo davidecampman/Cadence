@@ -31,7 +31,7 @@ from pydantic import BaseModel
 
 from cadence.app import CadenceApp
 from cadence.core.config import update_config as _update_config
-from cadence.core.streaming import StreamCollector, StreamEvent
+from cadence.core.streaming import StreamCollector
 from cadence.core.keystore import (
     save_key as _save_key,
     delete_key as _delete_key,
@@ -51,6 +51,7 @@ from cadence.core.chatgpt_oauth import (
     DEFAULT_CALLBACK_PORT,
     DEFAULT_CALLBACK_URL,
 )
+from cadence.core.trace import TraceLogger
 from cadence.core.types import TraceStep
 from cadence.storage.chat_store import ChatStore, ChatMessageRecord
 
@@ -152,15 +153,27 @@ class WSClient:
 
 _ws_clients: dict[int, WSClient] = {}
 _ws_drain_tasks: dict[int, asyncio.Task] = {}
+_dag_snapshots: dict[str, dict] = {}
+_latest_dag_snapshot: dict | None = None
 
 
-async def _broadcast_trace(step: TraceStep) -> None:
+def _schedule(coro) -> None:
+    """Schedule a coroutine on the current event loop if one is running."""
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(coro)
+    except RuntimeError:
+        coro.close()
+
+
+async def _broadcast_trace(step: TraceStep, session_id: str | None = None) -> None:
     """Send a trace step to all connected WebSocket clients (non-blocking)."""
     data = step.model_dump()
     data["timestamp"] = step.timestamp
-    msg = json.dumps({"type": "trace", "data": data})
+    msg = json.dumps({"type": "trace", "data": data, "session_id": session_id})
     dead = []
-    for cid, client in _ws_clients.items():
+    clients = _ws_clients.items() if hasattr(_ws_clients, "items") else []
+    for cid, client in clients:
         ok = await client.send(msg)
         if not ok and client.consecutive_failures > 10:
             dead.append(cid)
@@ -168,11 +181,12 @@ async def _broadcast_trace(step: TraceStep) -> None:
         _remove_ws_client(cid)
 
 
-async def _broadcast_dag(dag_data: dict) -> None:
+async def _broadcast_dag(dag_data: dict, session_id: str | None = None) -> None:
     """Send a DAG snapshot to all connected WebSocket clients (non-blocking)."""
-    msg = json.dumps({"type": "dag_update", "data": dag_data})
+    msg = json.dumps({"type": "dag_update", "data": dag_data, "session_id": session_id})
     dead = []
-    for cid, client in _ws_clients.items():
+    clients = _ws_clients.items() if hasattr(_ws_clients, "items") else []
+    for cid, client in clients:
         ok = await client.send(msg)
         if not ok and client.consecutive_failures > 10:
             dead.append(cid)
@@ -193,9 +207,8 @@ def _remove_ws_client(cid: int) -> None:
             pass
 
 
-def _serialize_dag(dag) -> dict:
+def _serialize_dag(dag, session_id: str | None = None) -> dict:
     """Convert a TaskDAG into a JSON-serialisable dict of nodes and edges."""
-    from cadence.agents.orchestrator import TaskDAG
     nodes = []
     edges = []
     for task in dag._tasks.values():
@@ -208,29 +221,49 @@ def _serialize_dag(dag) -> dict:
         })
         for dep_id in task.dependencies:
             edges.append({"from": dep_id, "to": task.id})
-    return {"nodes": nodes, "edges": edges}
+    return {"nodes": nodes, "edges": edges, "session_id": session_id}
 
 
-# Monkey-patch the trace logger to broadcast steps
-_original_log = None
+def _attach_global_trace_broadcast(agent_app: CadenceApp) -> None:
+    """Broadcast trace steps logged directly on the app-level trace."""
+    agent_app.trace.clear_listeners()
+    agent_app.trace.add_listener(lambda step: _schedule(_broadcast_trace(step)))
 
 
-def _patched_log(step: TraceStep) -> None:
-    _original_log(step)
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(_broadcast_trace(step))
-    except RuntimeError:
-        pass
+def _make_request_trace(
+    agent_app: CadenceApp,
+    session_id: str,
+    collector: StreamCollector | None = None,
+) -> TraceLogger:
+    """Create a trace that is isolated for responses but mirrored globally."""
+    trace = TraceLogger(
+        trace_file=agent_app.config.logging.trace_file,
+        console=False,
+    )
+
+    def _on_step(step: TraceStep) -> None:
+        agent_app.trace.capture(step)
+        _schedule(_broadcast_trace(step, session_id=session_id))
+        if collector:
+            if step.step_type == "thought":
+                _schedule(collector.emit_thinking(step.content, step.agent_id))
+            elif step.step_type == "action":
+                _schedule(collector.emit_status(step.content, step.agent_id))
+
+    trace.add_listener(_on_step)
+    return trace
 
 
-def _on_task_update(dag) -> None:
-    """Called by the orchestrator whenever a task changes status."""
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(_broadcast_dag(_serialize_dag(dag)))
-    except RuntimeError:
-        pass
+def _make_task_update_handler(session_id: str):
+    """Return a callback that stores and broadcasts a session-scoped DAG."""
+    def _on_task_update(dag) -> None:
+        global _latest_dag_snapshot
+        snapshot = _serialize_dag(dag, session_id=session_id)
+        _dag_snapshots[session_id] = snapshot
+        _latest_dag_snapshot = snapshot
+        _schedule(_broadcast_dag(snapshot, session_id=session_id))
+
+    return _on_task_update
 
 
 # --- Request / Response models ---
@@ -258,14 +291,10 @@ class ChatResponse(BaseModel):
 
 @app.on_event("startup")
 async def startup():
-    global _original_log
     # Inject any stored API keys into environment before first use
     inject_keys_to_env()
     agent_app = get_app()
-    _original_log = agent_app.trace.log
-    agent_app.trace.log = _patched_log
-    # Wire DAG update callback for live graph streaming
-    agent_app.orchestrator.on_task_update = _on_task_update
+    _attach_global_trace_broadcast(agent_app)
     # Connect to configured MCP servers
     await agent_app.connect_mcp_servers()
 
@@ -367,14 +396,21 @@ async def chat(req: ChatRequest):
         # Retrieve prior conversation history from persistent store
         history = list(store.get_session_history(session_id))
 
-        # Track trace steps for this request
-        start_idx = len(agent_app.trace.steps)
+        request_trace = _make_request_trace(agent_app, session_id)
+        on_task_update = _make_task_update_handler(session_id)
         start = time.time()
 
         try:
             # Wrap orchestrator call in a timeout to prevent indefinite hangs
             response = await asyncio.wait_for(
-                agent_app.run(req.message, conversation_history=history, images=req.images),
+                agent_app.run(
+                    req.message,
+                    conversation_history=history,
+                    images=req.images,
+                    session_id=session_id,
+                    trace=request_trace,
+                    on_task_update=on_task_update,
+                ),
                 timeout=_CHAT_REQUEST_TIMEOUT,
             )
         except asyncio.TimeoutError:
@@ -418,7 +454,7 @@ async def chat(req: ChatRequest):
         )
 
         duration_ms = (time.time() - start) * 1000
-        new_steps = agent_app.trace.steps[start_idx:]
+        new_steps = request_trace.steps
 
         result = ChatResponse(
             response=response,
@@ -538,14 +574,9 @@ async def put_config(req: ConfigUpdateRequest):
     """Update configuration (partial merge). Returns the full updated config."""
     agent_app = get_app()
     new_config = _update_config(req.updates)
-    # Update the live app's config reference AND propagate to sub-components
-    agent_app.config = new_config
-    agent_app.orchestrator.config = new_config
-    if agent_app.orchestrator.prompt_evolver:
-        agent_app.orchestrator.prompt_evolver.config = new_config
-    agent_app.router = __import__(
-        "cadence.routing.router", fromlist=["SmartRouter"]
-    ).SmartRouter(new_config)
+    await agent_app.reconfigure(new_config)
+    agent_app.trace._console = False
+    _attach_global_trace_broadcast(agent_app)
     return new_config.model_dump()
 
 
@@ -617,8 +648,12 @@ async def get_trace(limit: int = 50):
 
 
 @app.get("/api/dag")
-async def get_dag():
+async def get_dag(session_id: str | None = None):
     """Return the current task DAG as nodes + edges for graph visualisation."""
+    if session_id:
+        return _dag_snapshots.get(session_id, {"nodes": [], "edges": [], "session_id": session_id})
+    if _latest_dag_snapshot is not None:
+        return _latest_dag_snapshot
     agent_app = get_app()
     return _serialize_dag(agent_app.orchestrator.dag)
 
@@ -716,10 +751,9 @@ async def post_bedrock_keys(req: BedrockKeysRequest):
     agent_app = get_app()
     if not agent_app.config.models.bedrock.enabled:
         new_config = _update_config({"models": {"bedrock": {"enabled": True}}})
-        agent_app.config = new_config
-        agent_app.orchestrator.config = new_config
-        if agent_app.orchestrator.prompt_evolver:
-            agent_app.orchestrator.prompt_evolver.config = new_config
+        await agent_app.reconfigure(new_config)
+        agent_app.trace._console = False
+        _attach_global_trace_broadcast(agent_app)
 
     return {"status": "saved", "provider": "bedrock", "auth_type": req.auth_type}
 
@@ -741,10 +775,9 @@ async def remove_key(provider: str):
             agent_app = get_app()
             if agent_app.config.models.bedrock.enabled:
                 new_config = _update_config({"models": {"bedrock": {"enabled": False}}})
-                agent_app.config = new_config
-                agent_app.orchestrator.config = new_config
-                if agent_app.orchestrator.prompt_evolver:
-                    agent_app.orchestrator.prompt_evolver.config = new_config
+                await agent_app.reconfigure(new_config)
+                agent_app.trace._console = False
+                _attach_global_trace_broadcast(agent_app)
         return {"status": "deleted" if deleted else "not_found", "provider": provider}
 
     deleted = _delete_key(provider)
@@ -1049,15 +1082,9 @@ async def health():
 
 # --- Knowledge base endpoints ---
 
-_kb_store = None
-
 
 def get_kb_store():
-    global _kb_store
-    if _kb_store is None:
-        from cadence.knowledge.store import KnowledgeStore
-        _kb_store = KnowledgeStore()
-    return _kb_store
+    return get_app().knowledge
 
 
 class KBIngestRequest(BaseModel):
@@ -1225,34 +1252,48 @@ async def chat_stream(req: ChatRequest):
     history = list(store.get_session_history(session_id))
 
     collector = StreamCollector()
+    request_trace = _make_request_trace(agent_app, session_id, collector=collector)
+    on_task_update = _make_task_update_handler(session_id)
 
     async def _run_and_collect():
-        start = time.time()
         try:
-            response = await agent_app.run(req.message, conversation_history=history, images=req.images)
-            duration_ms = (time.time() - start) * 1000
+            async with _chat_semaphore:
+                start = time.time()
+                response = await agent_app.run_streaming(
+                    req.message,
+                    collector=collector,
+                    conversation_history=history,
+                    images=req.images,
+                    session_id=session_id,
+                    trace=request_trace,
+                    on_task_update=on_task_update,
+                )
+                duration_ms = (time.time() - start) * 1000
 
-            # Persist exchange (with same compression/cap logic as the non-streaming endpoint)
-            new_history = list(history)
-            new_history.append({"role": "user", "content": req.message})
-            new_history.append({"role": "assistant", "content": response})
+                # Persist exchange (with same compression/cap logic as the non-streaming endpoint)
+                new_history = list(history)
+                new_history.append({"role": "user", "content": req.message})
+                new_history.append({"role": "assistant", "content": response})
 
-            turn_count = len(new_history) // 2
-            if conv_config.compression_enabled and turn_count > conv_config.compression_threshold:
-                new_history = await _compress_history(agent_app, session_id, new_history)
-            max_entries = conv_config.max_history_turns * 2
-            if len(new_history) > max_entries:
-                new_history = new_history[-max_entries:]
+                turn_count = len(new_history) // 2
+                if conv_config.compression_enabled and turn_count > conv_config.compression_threshold:
+                    new_history = await _compress_history(agent_app, session_id, new_history)
+                max_entries = conv_config.max_history_turns * 2
+                if len(new_history) > max_entries:
+                    new_history = new_history[-max_entries:]
 
-            store.save_session_history(
-                session_id, new_history,
-                summary=store.get_session_summary(session_id),
-            )
-            await collector.emit_done(
-                full_response=response,
-                session_id=session_id,
-                duration_ms=duration_ms,
-            )
+                store.save_session_history(
+                    session_id, new_history,
+                    summary=store.get_session_summary(session_id),
+                )
+                await collector.emit_done(
+                    full_response=response,
+                    session_id=session_id,
+                    duration_ms=duration_ms,
+                    trace_steps=[s.model_dump() for s in request_trace.steps],
+                    context_turns=len(new_history) // 2,
+                    max_context_turns=conv_config.max_history_turns,
+                )
         except asyncio.CancelledError:
             await collector.emit_error("Request cancelled by user.")
         except Exception as e:
@@ -1264,40 +1305,13 @@ async def chat_stream(req: ChatRequest):
     task = asyncio.create_task(_run_and_collect())
     _running_tasks[session_id] = task
 
-    # Add a per-request streaming hook rather than monkey-patching the global
-    # trace logger (which races when multiple streams are active concurrently).
-    _base_log = agent_app.trace._base_log if hasattr(agent_app.trace, "_base_log") else agent_app.trace.log
-    agent_app.trace._base_log = _base_log  # preserve the original
-
-    # Use a list of active stream collectors instead of overwriting the log method
-    if not hasattr(agent_app.trace, "_stream_collectors"):
-        agent_app.trace._stream_collectors = []
-
-        def _multiplexing_log(step):
-            _base_log(step)
-            for coll in list(agent_app.trace._stream_collectors):
-                try:
-                    loop = asyncio.get_running_loop()
-                    if step.step_type == "thought":
-                        loop.create_task(coll.emit_thinking(step.content, step.agent_id))
-                    elif step.step_type == "action":
-                        loop.create_task(coll.emit_status(step.content, step.agent_id))
-                except RuntimeError:
-                    pass
-
-        agent_app.trace.log = _multiplexing_log
-
-    agent_app.trace._stream_collectors.append(collector)
-
     async def _event_generator():
         try:
             async for event in collector:
                 yield event.to_sse()
         finally:
-            try:
-                agent_app.trace._stream_collectors.remove(collector)
-            except ValueError:
-                pass
+            if not task.done():
+                task.cancel()
 
     return StreamingResponse(
         _event_generator(),

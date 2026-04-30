@@ -89,7 +89,15 @@ class StreamCollector:
             data={"status": status, "agent_id": agent_id},
         ))
 
-    async def emit_done(self, full_response: str, session_id: str = "", duration_ms: float = 0.0) -> None:
+    async def emit_done(
+        self,
+        full_response: str,
+        session_id: str = "",
+        duration_ms: float = 0.0,
+        trace_steps: list[dict[str, Any]] | None = None,
+        context_turns: int = 0,
+        max_context_turns: int = 50,
+    ) -> None:
         """Emit the final done event and close the stream."""
         self._full_response = full_response
         await self.emit(StreamEvent(
@@ -98,6 +106,9 @@ class StreamCollector:
                 "response": full_response,
                 "session_id": session_id,
                 "duration_ms": duration_ms,
+                "trace_steps": trace_steps or [],
+                "context_turns": context_turns,
+                "max_context_turns": max_context_turns,
             },
         ))
         await self.close()

@@ -1,5 +1,6 @@
 """Integration tests for REST API endpoints."""
 
+import asyncio
 import time
 
 import pytest
@@ -7,6 +8,8 @@ from fastapi.testclient import TestClient
 
 import cadence.api as api_module
 from cadence.api import app
+from cadence.core.config import Config
+from cadence.core.trace import TraceLogger
 from cadence.storage.chat_store import ChatStore
 
 
@@ -28,6 +31,57 @@ def client(tmp_path, monkeypatch, chat_store):
     return TestClient(app, raise_server_exceptions=False)
 
 
+def _make_api_config() -> Config:
+    cfg = Config()
+    cfg.prompt_evolution.enabled = False
+    cfg.message_bus.enabled = False
+    cfg.checkpoints.enabled = False
+    cfg.learning.enabled = False
+    cfg.knowledge_graph.enabled = False
+    cfg.mcp.enabled = False
+    return cfg
+
+
+class FakeAgentApp:
+    def __init__(self):
+        self.config = _make_api_config()
+        self.trace = TraceLogger(console=False)
+        self.reconfigured_with: Config | None = None
+
+    async def run(
+        self,
+        message,
+        conversation_history=None,
+        images=None,
+        session_id="",
+        trace=None,
+        on_task_update=None,
+    ):
+        trace.thought("fake-agent", f"request trace for {session_id}: {message}")
+        await asyncio.sleep(0)
+        return f"reply for {session_id}"
+
+    async def run_streaming(
+        self,
+        message,
+        collector,
+        conversation_history=None,
+        images=None,
+        session_id="",
+        trace=None,
+        on_task_update=None,
+    ):
+        trace.thought("fake-agent", f"stream trace for {session_id}: {message}")
+        await collector.emit_token("streamed", agent_id="fake-agent")
+        await asyncio.sleep(0)
+        return "streamed response"
+
+    async def reconfigure(self, new_config: Config) -> None:
+        self.reconfigured_with = new_config
+        self.config = new_config
+        self.trace = TraceLogger(console=False)
+
+
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
@@ -39,6 +93,78 @@ class TestHealthEndpoint:
         data = resp.json()
         assert data["status"] == "ok"
         assert data["version"] == "0.1.0"
+
+
+class TestChatRuntimeIsolation:
+    def test_chat_response_uses_request_local_trace(self, client, monkeypatch):
+        fake_app = FakeAgentApp()
+        fake_app.trace.thought("global", "unrelated global trace")
+        monkeypatch.setattr(api_module, "get_app", lambda: fake_app)
+
+        resp = client.post("/api/chat", json={"message": "hello", "session_id": "session-a"})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["session_id"] == "session-a"
+        assert data["response"] == "reply for session-a"
+        assert len(data["trace_steps"]) == 1
+        assert data["trace_steps"][0]["content"] == "request trace for session-a: hello"
+
+    def test_streaming_chat_emits_token_before_done(self, client, monkeypatch):
+        fake_app = FakeAgentApp()
+        monkeypatch.setattr(api_module, "get_app", lambda: fake_app)
+
+        resp = client.post(
+            "/api/chat/stream",
+            json={"message": "hello", "session_id": "stream-session"},
+        )
+
+        assert resp.status_code == 200
+        body = resp.text
+        assert "event: token" in body
+        assert "event: done" in body
+        assert body.index("event: token") < body.index("event: done")
+        assert '"session_id": "stream-session"' in body
+        assert '"trace_steps": [' in body
+
+    def test_dag_endpoint_returns_session_scoped_snapshot(self, client):
+        from cadence.agents.orchestrator import TaskDAG
+        from cadence.core.types import Task
+
+        api_module._dag_snapshots.clear()
+        dag = TaskDAG()
+        dag.add(Task(description="Session scoped task"))
+
+        handler = api_module._make_task_update_handler("dag-session")
+        handler(dag)
+
+        resp = client.get("/api/dag?session_id=dag-session")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["session_id"] == "dag-session"
+        assert data["nodes"][0]["description"] == "Session scoped task"
+
+        empty_resp = client.get("/api/dag?session_id=other-session")
+        assert empty_resp.status_code == 200
+        assert empty_resp.json() == {
+            "nodes": [],
+            "edges": [],
+            "session_id": "other-session",
+        }
+
+    def test_put_config_reconfigures_live_app(self, client, monkeypatch):
+        fake_app = FakeAgentApp()
+        new_config = _make_api_config()
+        new_config.agents.max_parallel = 2
+
+        monkeypatch.setattr(api_module, "get_app", lambda: fake_app)
+        monkeypatch.setattr(api_module, "_update_config", lambda _updates: new_config)
+
+        resp = client.put("/api/config", json={"updates": {"agents": {"max_parallel": 2}}})
+
+        assert resp.status_code == 200
+        assert fake_app.reconfigured_with is new_config
+        assert resp.json()["agents"]["max_parallel"] == 2
 
 
 # ---------------------------------------------------------------------------

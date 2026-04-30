@@ -16,6 +16,7 @@ from cadence.core.checkpoint import CheckpointManager
 from cadence.core.config import Config, get_config
 from cadence.core.llm import chat_completion
 from cadence.core.message_bus import MessageBus
+from cadence.core.streaming import StreamCollector
 from cadence.core.trace import TraceLogger
 from cadence.core.types import (
     AgentRole,
@@ -365,13 +366,13 @@ class Orchestrator:
         """Process a user request end-to-end."""
         self._session_id = session_id
         self._images = images
-        self._session_tokens = 0  # Reset per-request to avoid cross-request accumulation
         _start_time = time.time()
 
         # Check session budget before starting
         budget_error = self._check_session_budget()
         if budget_error:
             return budget_error
+        self._session_tokens = 0
 
         self.trace.observation("orchestrator", f"Request: {user_request}")
 
@@ -511,6 +512,146 @@ class Orchestrator:
 
         return final
 
+    async def run_streaming(
+        self,
+        user_request: str,
+        collector: StreamCollector,
+        conversation_history: list[dict[str, str]] | None = None,
+        session_id: str = "",
+        images: list[dict] | None = None,
+    ) -> str:
+        """Process a user request and stream direct/simple agent execution."""
+        self._session_id = session_id
+        self._images = images
+        _start_time = time.time()
+
+        budget_error = self._check_session_budget()
+        if budget_error:
+            return budget_error
+        self._session_tokens = 0
+
+        self.trace.observation("orchestrator", f"Request: {user_request}")
+        self.dag = TaskDAG()
+        self._conversation_history = conversation_history or []
+
+        learning_context = ""
+        if self.learning_store:
+            task_type = self.learning_store.classify_task(user_request)
+            insights = self.learning_store.get_insights(task_type, limit=3)
+            if insights:
+                tips = "; ".join(i.recommendation for i in insights[:2])
+                learning_context = f"\n[Learning from past tasks ({task_type})]: {tips}"
+
+        await collector.emit_status("planning", agent_id="orchestrator")
+        plan_result = await self._plan(user_request + learning_context)
+
+        if isinstance(plan_result, CollaborationResult):
+            self._session_tokens += self.collaboration._total_tokens
+            self.collaboration._total_tokens = 0
+            return plan_result.final_answer
+
+        tasks = plan_result
+
+        if not tasks:
+            agent = self._spawn_agent("general")
+            result = await agent.run_streaming(
+                user_request,
+                collector=collector,
+                conversation_history=self._conversation_history,
+                images=self._images,
+            )
+            self._session_tokens += agent._total_tokens
+            return result
+
+        for task in tasks:
+            self.dag.add(task)
+
+        self.trace.thought("orchestrator", f"Plan:\n{self.dag.summary()}")
+        await collector.emit_status("executing task graph", agent_id="orchestrator")
+        if self.on_task_update:
+            self.on_task_update(self.dag)
+
+        results: dict[str, str] = {}
+        max_parallel = self.config.agents.max_parallel
+
+        while not self.dag.all_completed():
+            budget_error = self._check_session_budget()
+            if budget_error:
+                self.trace.error("orchestrator", "Session token budget exceeded during execution")
+                for t in self.dag._tasks.values():
+                    if t.status == TaskStatus.PENDING:
+                        t.status = TaskStatus.FAILED
+                        t.result = "Skipped — session budget exceeded"
+                break
+
+            await self.dag.evaluate_conditionals(results, self._llm_judge)
+
+            ready = self.dag.ready_tasks()
+            if not ready:
+                pending = [t for t in self.dag._tasks.values() if t.status == TaskStatus.PENDING]
+                if pending:
+                    self.trace.error("orchestrator", "Deadlock detected — unresolvable dependencies")
+                    for t in pending:
+                        t.status = TaskStatus.FAILED
+                        t.result = "Blocked by unresolved dependencies"
+                break
+
+            batch = ready[:max_parallel]
+            coros = []
+            for task in batch:
+                task.status = TaskStatus.RUNNING
+                coros.append(self._execute_task(task, results))
+
+            await asyncio.gather(*coros)
+
+            for task in batch:
+                if task.status == TaskStatus.COMPLETED and "loop" in task.metadata:
+                    retrying = await self.dag.evaluate_loop(
+                        task, results, self._llm_judge,
+                        max_cap=self.config.agents.max_loop_iterations,
+                    )
+                    if retrying:
+                        iteration = self.dag._iteration_counts.get(task.id, 0)
+                        self.trace.thought(
+                            "orchestrator",
+                            f"Task [{task.id[:6]}] loop retry {iteration} — "
+                            f"condition not met, retrying",
+                        )
+
+        await collector.emit_status("synthesizing", agent_id="orchestrator")
+        final = await self._synthesize(user_request, results)
+        final = await self._evaluate(user_request, final)
+        if "Self-review flagged" in final:
+            final = await self._correction_run(user_request, final)
+
+        if self.learning_store:
+            task_type = self.learning_store.classify_task(user_request)
+            all_failed = all(
+                t.status == TaskStatus.FAILED for t in self.dag._tasks.values()
+            )
+            has_failures = any(
+                t.status == TaskStatus.FAILED for t in self.dag._tasks.values()
+            )
+            outcome = (
+                OutcomeRating.FAILURE if all_failed
+                else OutcomeRating.PARTIAL if has_failures
+                else OutcomeRating.SUCCESS
+            )
+            self.learning_store.record(StrategyRecord(
+                session_id=self._session_id,
+                task_type=task_type,
+                task_description=user_request[:500],
+                strategy=f"Decomposed into {len(tasks)} tasks" if tasks else "Direct execution",
+                tools_used=[],
+                model_used=self.config.models.strong,
+                role_used="orchestrator",
+                outcome=outcome,
+                tokens_used=self._session_tokens,
+                duration_ms=(time.time() - _start_time) * 1000,
+            ))
+
+        return final
+
     def _format_history_block(self) -> str:
         """Format prior conversation turns into a context block for prompts."""
         if not self._conversation_history:
@@ -559,14 +700,9 @@ class Orchestrator:
     async def _plan(self, request: str) -> list[Task] | CollaborationResult:
         """Use the fast model to decompose a request into tasks or select a collaboration mode.
 
-        Includes a direct-execution fast path for simple requests and iterative
-        plan validation with complexity analysis.
+        Lets the planner return SIMPLE for direct execution, with iterative plan
+        validation and complexity analysis for multi-step work.
         """
-        # Fast path: skip planning entirely for simple requests
-        if self._is_simple_request(request):
-            self.trace.thought("orchestrator", "Simple request — direct execution (fast path)")
-            return []
-
         history_block = self._format_history_block()
 
         # Include budget/time constraints to discourage over-decomposition
